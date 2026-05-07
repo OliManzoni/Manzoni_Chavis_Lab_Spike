@@ -265,15 +265,50 @@ if uploaded_file is not None:
         
         st.pyplot(fig)
 
-        # 6. DOCUMENTATION INTÉGRÉE
-        with st.expander("📖 Aide Mémoire : Formalisme & Biophysique"):
+        # 6. DOCUMENTATION MÉTHODOLOGIQUE (Standard Scientifique)
+        with st.expander("📖 Aide Mémoire : Formalisme, Biophysique & Limites"):
+            st.markdown("### 1. Mesure de la Capacitance Membranaire ($C_m$)")
+            st.write("""
+            Le neurone est modélisé ici comme un circuit RC simple (modèle à un compartiment). 
+            La capacitance est extraite par la méthode de la constante de temps en réponse à un échelon de courant hyperpolarisant.
+            """)
+            
+            st.latex(r"C_m = \frac{\tau_m}{R_{in}}")
+            
             st.markdown("""
-            * **Rise Time (10-90%) :** Temps mis par le voltage pour passer de 10% à 90% de son amplitude (du seuil au pic).
-            * **Half-Width :** Largeur du potentiel d'action mesurée exactement à la moitié de son amplitude maximale.
-            * **Decay Time (90-10%) :** Vitesse de repolarisation, mesurée lors de la descente du pic.
-            * **AHP (Post-hyperpolarisation) :** Voltage le plus négatif atteint dans la phase réfractaire (fenêtre de 10ms post-pic).
+            * **Protocole d'extraction :**
+                * **$R_{in}$ (Résistance d'entrée) :** Calculée à partir de la pente ($\Delta V/\Delta I$) de la portion linéaire de la courbe I-V (4 premiers échelons hyperpolarisants).
+                * **$\tau_m$ (Constante de temps) :** Définie comme le temps nécessaire pour que $V_m$ atteigne **63.2%** (soit $1 - 1/e$) de son amplitude stationnaire ($V_{ss}$).
+            * **Limites Méthodologiques :**
+                * **Erreur de Space-Clamp :** Cette méthode suppose un neurone sphérique (isopotentiel). Dans les neurones complexes (ex: pyramidaux), les dendrites distales agissent comme des filtres passe-bas, entraînant une sous-estimation de la capacitance totale.
+                * **Conductances actives :** La présence de courants de fuite non-linéaires ou de courants activés par l'hyperpolarisation (comme $I_h$) peut fausser la linéarité du déclin exponentiel.
             """)
 
+            st.markdown("---")
+            st.markdown("### 2. Morphométrie du Potentiel d'Action (PA)")
+            st.write("""
+            L'analyse porte sur le premier PA généré à la rhéobase pour minimiser les effets de l'adaptation et de l'inactivation sodique.
+            """)
+            
+            col_doc1, col_doc2 = st.columns(2)
+            with col_doc1:
+                st.markdown("""
+                **Dynamique du Seuil :**
+                * **Seuil ($V_{thresh}$) :** Point où $dV/dt$ dépasse 15 mV/ms. C'est l'indice le plus fiable de l'excitabilité intrinsèque.
+                * **Amplitude :** Différence absolue entre le pic ($V_{peak}$) et le seuil.
+                * **AHP ($V_{min}$) :** Potentiel minimal post-PA, reflétant l'activation des courants $K^+$ (BK/SK).
+                """)
+            with col_doc2:
+                st.markdown("""
+                **Cinétique de Phase :**
+                * **Rise Time (10-90%) :** Temps de transition de la phase ascendante (courants $Na^+$).
+                * **Decay Time (90-10%) :** Temps de repolarisation (courants $K^+$).
+                * **Half-Width :** Largeur à mi-hauteur de l'amplitude. Un marqueur sensible de la maturation des circuits ou des modèles pathologiques (ex: FXS).
+                """)
+
+            st.info("💡 Note : Les calculs de cinétique (Rise/Decay) utilisent un lissage gaussien pour éliminer le bruit de numérisation du convertisseur A/D.")
+
+    
     finally:
         if os.path.exists(tmp_filepath): os.remove(tmp_filepath)
 else:
