@@ -96,7 +96,7 @@ if uploaded_file is not None:
             v_rest_list.append(v_r); n_spikes.append(num_spikes); v_thresh_list.append(vt)
             ap_amps.append(amp); ap_widths.append(width); ap_rise.append(rise); ap_decay.append(decay); ap_ahp.append(ahp)
 
-        # Calculs Globaux
+        # --- CALCULS GLOBAUX ---
         v_rest_final = np.mean(v_rest_list)
         neg = [i for i, c in enumerate(courants) if c < 0]
         rin, tau, cm = np.nan, np.nan, np.nan
@@ -110,31 +110,35 @@ if uploaded_file is not None:
             if len(cross_t)>0: 
                 tau = (cross_t[0]/sr)*1000.0
                 cm = (tau/rin)*1000.0 if rin>0 else np.nan
+                
+        # Extraction de la Rhéobase Globale (mV et I)
+        rheo_idx_global = next((i for i, count in enumerate(n_spikes) if count > 0), None)
+        rheo_v = v_thresh_list[rheo_idx_global] if rheo_idx_global is not None else np.nan
+        rheo_i = courants[rheo_idx_global] if rheo_idx_global is not None else np.nan
 
         # --- DASHBOARD ---
         st.subheader("📊 Propriétés Intrinsèques Globales")
-        c1, c2, c3, c4 = st.columns(4)
+        # Passage à 5 colonnes pour intégrer la Rhéobase
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Vrest", f"{v_rest_final:.1f} mV")
         c2.metric("Rin", f"{rin:.1f} MΩ")
         c3.metric("Cm (Capacitance)", f"{cm:.1f} pF")
         c4.metric("Tau_m", f"{tau:.1f} ms")
+        c5.metric("Rhéobase (Seuil)", f"{rheo_v:.1f} mV" if not np.isnan(rheo_v) else "N/A")
 
         st.divider()
 
         # --- VISUALISATION INTERACTIVE & MORPHOLOGIE DYNAMIQUE ---
         st.subheader("📈 Visualisations des Traces & Courbes")
         
-        # 1. Contrôles utilisateurs
         col_v1, col_v2 = st.columns(2)
         with col_v1:
-            rheo_idx = next((i for i, count in enumerate(n_spikes) if count > 0), 0)
-            sw_idx = st.slider("Sélectionner un Sweep individuel", 0, abf.sweepCount-1, int(rheo_idx))
+            sw_idx = st.slider("Sélectionner un Sweep individuel", 0, abf.sweepCount-1, int(rheo_idx_global) if rheo_idx_global else 0)
         with col_v2:
             stk_indices = st.multiselect("Sélectionner les sweeps pour l'Overlay", 
                                          list(range(abf.sweepCount)), 
                                          default=[0, abf.sweepCount//2, abf.sweepCount-1])
         
-        # 2. Affichage dynamique de la morphologie (lié au curseur)
         st.markdown(f"**⚡ Morphologie du 1er PA pour le Sweep {sw_idx} ({courants[sw_idx]:.1f} {unit_i})**")
         
         if n_spikes[sw_idx] > 0:
@@ -147,9 +151,8 @@ if uploaded_file is not None:
         else:
             st.info(f"Trace Passive (I = {courants[sw_idx]:.1f} {unit_i}) : Aucun Potentiel d'Action détecté.")
             
-        st.write("") # Espace avant les graphiques
+        st.write("") 
         
-        # 3. Préparation de la figure Matplotlib
         plt.style.use('seaborn-v0_8-white')
         fig = plt.figure(figsize=(16, 10))
         gs = fig.add_gridspec(2, 2)
@@ -177,7 +180,7 @@ if uploaded_file is not None:
         ax3 = fig.add_subplot(gs[1, 0])
         ax3.plot(courants, v_stat, 'o-', color='tab:blue', label="Steady-state")
         ax3.plot(courants, v_peak, 'x--', color='tab:blue', alpha=0.5, label="Peak (Sag)")
-        ax3.plot(courants[sw_idx], v_stat[sw_idx], 'ro', markersize=9, zorder=5) # Marqueur rouge
+        ax3.plot(courants[sw_idx], v_stat[sw_idx], 'ro', markersize=9, zorder=5) 
         ax3.set_title("Relation I-V", fontweight='bold')
         ax3.set_xlabel(f"Injection ({unit_i})")
         ax3.set_ylabel("Potentiel (mV)")
@@ -186,7 +189,7 @@ if uploaded_file is not None:
         # Courbe f-I avec Marqueur
         ax4 = fig.add_subplot(gs[1, 1])
         ax4.plot(courants, n_spikes, 's-', color='tab:orange')
-        ax4.plot(courants[sw_idx], n_spikes[sw_idx], 'ro', markersize=9, zorder=5) # Marqueur rouge
+        ax4.plot(courants[sw_idx], n_spikes[sw_idx], 'ro', markersize=9, zorder=5) 
         ax4.set_title("Excitabilité (Courbe f-I)", fontweight='bold')
         ax4.set_xlabel(f"Injection ({unit_i})")
         ax4.set_ylabel("Nombre de PA")
@@ -196,12 +199,34 @@ if uploaded_file is not None:
         # --- EXPORT ---
         st.divider()
         st.subheader("📥 Exportation des Résultats")
-        df_exp = pd.DataFrame({
+        
+        col_exp1, col_exp2 = st.columns(2)
+        
+        # Fichier 1 : Profil Global (1 ligne par cellule)
+        df_global = pd.DataFrame({
+            "Fichier": [uploaded_file.name],
+            "Vrest_mV": [v_rest_final],
+            "Rin_MOhms": [rin],
+            "Cm_pF": [cm],
+            "Tau_ms": [tau],
+            "Rheobase_I": [rheo_i],
+            "Rheobase_mV": [rheo_v]
+        })
+        col_exp1.download_button("💾 Exporter le Profil Global (CSV)", 
+                                 df_global.to_csv(index=False).encode('utf-8'), 
+                                 f"{uploaded_file.name}_Profil_Global.csv",
+                                 use_container_width=True)
+
+        # Fichier 2 : Data par Sweep (Cinétiques)
+        df_sweeps = pd.DataFrame({
             "Sweep": abf.sweepList, "I_inj": courants, "Nb_AP_par_step": n_spikes,
             "V_steady": v_stat, "V_threshold": v_thresh_list, "AP_Amp": ap_amps, 
             "AP_Width_ms": ap_widths, "AP_Rise_ms": ap_rise, "AP_Decay_ms": ap_decay, "AP_AHP": ap_ahp
         })
-        st.download_button("💾 Télécharger les résultats complets (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_results.csv")
+        col_exp2.download_button("💾 Exporter les Données par Sweep (CSV)", 
+                                 df_sweeps.to_csv(index=False).encode('utf-8'), 
+                                 f"{uploaded_file.name}_Data_Sweeps.csv",
+                                 use_container_width=True)
 
         # --- FORMALISME COMPLET ---
         st.divider()
