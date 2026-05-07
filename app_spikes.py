@@ -9,7 +9,33 @@ import tempfile
 import os
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Manzoni Lab - Neural Excitability", layout="wide")
+st.set_page_config(page_title="Manzoni Lab - Excitability Pipeline", layout="wide")
+
+# --- GESTION DU BILINGUISME ---
+st.sidebar.header("🌍 Language / Langue")
+lang = st.sidebar.radio("Select Interface Language:", ["Français", "English"])
+
+# Dictionnaire de traduction simplifié
+T = {
+    "title": {"Français": "Pipeline Expert : Excitabilité & Morphométrie", "English": "Expert Pipeline: Excitability & Morphometry"},
+    "subtitle": {"Français": "Analyse de la Plasticité Synaptique | Standard de Publication", "English": "Synaptic Plasticity Analysis | Publication Standard"},
+    "load": {"Français": "📂 1. Chargement", "English": "📂 1. Upload File"},
+    "upload_btn": {"Français": "Charger un fichier ABF", "English": "Upload an ABF file"},
+    "settings": {"Français": "⚙️ 2. Réglages de Détection", "English": "⚙️ 2. Detection Settings"},
+    "spike_th": {"Français": "Seuil de détection (mV)", "English": "Spike detection threshold (mV)"},
+    "dvdt_th": {"Français": "Seuil dV/dt (mV/ms)", "English": "dV/dt threshold (mV/ms)"},
+    "global_metrics": {"Français": "📊 Propriétés Intrinsèques Globales", "English": "📊 Global Intrinsic Properties"},
+    "rheo_th": {"Français": "Rhéobase (Seuil)", "English": "Rheobase (Threshold)"},
+    "visuals": {"Français": "📈 Visualisations des Traces & Courbes", "English": "📈 Trace & Curve Visualizations"},
+    "select_sweep": {"Français": "Sélectionner un Sweep individuel", "English": "Select individual Sweep"},
+    "select_overlay": {"Français": "Sélectionner les sweeps pour l'Overlay", "English": "Select sweeps for Overlay"},
+    "morph_title": {"Français": "⚡ Morphologie du 1er PA pour le Sweep", "English": "⚡ 1st AP Morphometry for Sweep"},
+    "no_ap": {"Français": "Trace Passive : Aucun Potentiel d'Action détecté.", "English": "Passive Trace: No Action Potential detected."},
+    "export": {"Français": "📥 Exportation des Résultats", "English": "📥 Export Results"},
+    "exp_global": {"Français": "💾 Exporter le Profil Global (CSV)", "English": "💾 Export Global Profile (CSV)"},
+    "exp_sweeps": {"Français": "💾 Exporter les Données par Sweep (CSV)", "English": "💾 Export Sweep Data (CSV)"},
+    "readme_title": {"Français": "📚 README, Formalisme & Citation", "English": "📚 README, Formalism & Citation"}
+}
 
 # --- EN-TÊTE INSTITUTIONNEL ---
 col_l, col_r = st.columns([2, 5]) 
@@ -19,18 +45,18 @@ with col_l:
     except: 
         st.info("Manzoni Lab - Neurosciences") 
 with col_r:
-    st.markdown("# Pipeline Expert : Excitabilité & Morphométrie")
-    st.markdown("### Analyse de la Plasticité Synaptique | Standard de Publication")
+    st.markdown(f"# {T['title'][lang]}")
+    st.markdown(f"### {T['subtitle'][lang]}")
 
 st.divider()
 
 # --- BARRE LATÉRALE ---
-st.sidebar.header("📂 1. Chargement")
-uploaded_file = st.sidebar.file_uploader("Charger un fichier ABF", type=["abf"])
+st.sidebar.header(T["load"][lang])
+uploaded_file = st.sidebar.file_uploader(T["upload_btn"][lang], type=["abf"])
 
-st.sidebar.header("⚙️ 2. Réglages de Détection")
-spike_threshold = st.sidebar.number_input("Seuil de détection (mV)", value=0.0)
-dvdt_threshold = st.sidebar.number_input("Seuil dV/dt (mV/ms)", value=15.0)
+st.sidebar.header(T["settings"][lang])
+spike_threshold = st.sidebar.number_input(T["spike_th"][lang], value=0.0)
+dvdt_threshold = st.sidebar.number_input(T["dvdt_th"][lang], value=15.0)
 
 if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".abf") as tmp_file:
@@ -40,16 +66,14 @@ if uploaded_file is not None:
     try:
         abf = pyabf.ABF(tmp_filepath)
         
-        # DÉTECTION AUTOMATIQUE DES UNITÉS (Via Telegraph)
         unit_i = abf.sweepUnitsC  
         unit_v = abf.sweepUnitsY
-        st.sidebar.success(f"Unités détectées : {unit_i} / {unit_v}")
+        st.sidebar.success(f"Units : {unit_i} / {unit_v}")
         
         sr = abf.dataRate
         dt_ms = (1.0 / sr) * 1000.0  
         idx_start, idx_end = int(sr * 0.1), int(sr * 0.6) 
         
-        # Initialisation des listes
         courants, v_stat, v_peak, v_rest_list, n_spikes = [], [], [], [], []
         v_thresh_list, ap_amps, ap_widths, ap_rise, ap_decay, ap_ahp = [], [], [], [], [], []
         
@@ -75,6 +99,7 @@ if uploaded_file is not None:
                     smoothed = gaussian_filter1d(seg, sigma=1)
                     dvdt = np.diff(smoothed) / dt_ms
                     cross = np.where(dvdt > dvdt_threshold)[0]
+                    
                     if len(cross) > 0:
                         idx_t_seg = cross[0]
                         vt = seg[idx_t_seg]
@@ -85,15 +110,13 @@ if uploaded_file is not None:
                             v50 = vt + 0.5*amp; v10 = vt + 0.1*amp; v90 = vt + 0.9*amp
                             up = trace_win[idx_t_glob:pk_idx]
                             
-                            # --- FENÊTRE DYNAMIQUE (Correction d'inactivation/broadening) ---
-                            # S'adapte pour capter le decay complet même en cas d'élargissement massif du PA
+                            # --- CORRECTION DECAY (Tolérance étendue à 100ms) ---
                             if num_spikes > 1:
                                 dn_end = peaks[1] 
                             else:
-                                dn_end = min(len(trace_win), pk_idx + int(sr * 0.05)) # Tolérance max 50 ms
+                                dn_end = min(len(trace_win), pk_idx + int(sr * 0.1)) # 100 ms
                                 
                             dn = trace_win[pk_idx:dn_end]
-                            # -----------------------------------------------------------------
                             
                             r10 = np.where(up >= v10)[0]; r90 = np.where(up >= v90)[0]
                             if len(r10)>0 and len(r90)>0: rise = (r90[0]-r10[0])*dt_ms
@@ -125,34 +148,31 @@ if uploaded_file is not None:
                 tau = (cross_t[0]/sr)*1000.0
                 cm = (tau/rin)*1000.0 if rin>0 else np.nan
                 
-        # Extraction de la Rhéobase Globale
         rheo_idx_global = next((i for i, count in enumerate(n_spikes) if count > 0), None)
         rheo_v = v_thresh_list[rheo_idx_global] if rheo_idx_global is not None else np.nan
         rheo_i = courants[rheo_idx_global] if rheo_idx_global is not None else np.nan
 
         # --- DASHBOARD ---
-        st.subheader("📊 Propriétés Intrinsèques Globales")
+        st.subheader(T["global_metrics"][lang])
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Vrest", f"{v_rest_final:.1f} mV")
         c2.metric("Rin", f"{rin:.1f} MΩ")
         c3.metric("Cm (Capacitance)", f"{cm:.1f} pF")
         c4.metric("Tau_m", f"{tau:.1f} ms")
-        c5.metric("Rhéobase (Seuil)", f"{rheo_v:.1f} mV" if not np.isnan(rheo_v) else "N/A")
+        c5.metric(T["rheo_th"][lang], f"{rheo_v:.1f} mV" if not np.isnan(rheo_v) else "N/A")
 
         st.divider()
 
-        # --- VISUALISATION INTERACTIVE & MORPHOLOGIE DYNAMIQUE ---
-        st.subheader("📈 Visualisations des Traces & Courbes")
+        # --- VISUALISATION INTERACTIVE ---
+        st.subheader(T["visuals"][lang])
         
         col_v1, col_v2 = st.columns(2)
         with col_v1:
-            sw_idx = st.slider("Sélectionner un Sweep individuel", 0, abf.sweepCount-1, int(rheo_idx_global) if rheo_idx_global else 0)
+            sw_idx = st.slider(T["select_sweep"][lang], 0, abf.sweepCount-1, int(rheo_idx_global) if rheo_idx_global else 0)
         with col_v2:
-            stk_indices = st.multiselect("Sélectionner les sweeps pour l'Overlay", 
-                                         list(range(abf.sweepCount)), 
-                                         default=[0, abf.sweepCount//2, abf.sweepCount-1])
+            stk_indices = st.multiselect(T["select_overlay"][lang], list(range(abf.sweepCount)), default=[0, abf.sweepCount//2, abf.sweepCount-1])
         
-        st.markdown(f"**⚡ Morphologie du 1er PA pour le Sweep {sw_idx} ({courants[sw_idx]:.1f} {unit_i})**")
+        st.markdown(f"**{T['morph_title'][lang]} {sw_idx} ({courants[sw_idx]:.1f} {unit_i})**")
         
         if n_spikes[sw_idx] > 0:
             c_ap1, c_ap2, c_ap3, c_ap4, c_ap5 = st.columns(5)
@@ -162,7 +182,7 @@ if uploaded_file is not None:
             c_ap4.metric("Decay (90-10%)", f"{ap_decay[sw_idx]:.2f} ms")
             c_ap5.metric("AHP (Min)", f"{ap_ahp[sw_idx]:.1f} mV")
         else:
-            st.info(f"Trace Passive (I = {courants[sw_idx]:.1f} {unit_i}) : Aucun Potentiel d'Action détecté.")
+            st.info(T["no_ap"][lang])
             
         st.write("") 
         
@@ -170,93 +190,95 @@ if uploaded_file is not None:
         fig = plt.figure(figsize=(16, 10))
         gs = fig.add_gridspec(2, 2)
         
-        # Trace Individuelle
         ax1 = fig.add_subplot(gs[0, 0])
         abf.setSweep(sw_idx)
         ax1.plot(abf.sweepX, abf.sweepY, color='black', lw=1)
         if not np.isnan(v_thresh_list[sw_idx]):
-            ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.6, label="Seuil dV/dt")
+            ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.6, label="Threshold dV/dt")
             ax1.legend(loc='upper right')
-        ax1.set_title(f"Trace Individuelle : Sweep {sw_idx}", fontweight='bold')
-        ax1.set_ylabel("Potentiel (mV)")
+        ax1.set_title(f"Sweep {sw_idx}", fontweight='bold')
+        ax1.set_ylabel("mV")
 
-        # Overlay
         ax2 = fig.add_subplot(gs[0, 1])
         cmap = plt.colormaps.get_cmap('viridis')
         for i, s in enumerate(stk_indices):
             abf.setSweep(s)
             ax2.plot(abf.sweepX, abf.sweepY, color=cmap(i/max(1, len(stk_indices))), alpha=0.8, lw=0.8)
-        ax2.set_title(f"Superposition de {len(stk_indices)} traces", fontweight='bold')
-        ax2.set_ylabel("Potentiel (mV)")
+        ax2.set_title(f"Overlay ({len(stk_indices)} traces)", fontweight='bold')
+        ax2.set_ylabel("mV")
 
-        # Courbe I-V avec Marqueur
         ax3 = fig.add_subplot(gs[1, 0])
         ax3.plot(courants, v_stat, 'o-', color='tab:blue', label="Steady-state")
         ax3.plot(courants, v_peak, 'x--', color='tab:blue', alpha=0.5, label="Peak (Sag)")
         ax3.plot(courants[sw_idx], v_stat[sw_idx], 'ro', markersize=9, zorder=5) 
-        ax3.set_title("Relation I-V", fontweight='bold')
-        ax3.set_xlabel(f"Injection ({unit_i})")
-        ax3.set_ylabel("Potentiel (mV)")
-        ax3.legend()
+        ax3.set_title("I-V Curve", fontweight='bold')
+        ax3.set_xlabel(f"Current ({unit_i})"); ax3.set_ylabel("mV"); ax3.legend()
 
-        # Courbe f-I avec Marqueur
         ax4 = fig.add_subplot(gs[1, 1])
         ax4.plot(courants, n_spikes, 's-', color='tab:orange')
         ax4.plot(courants[sw_idx], n_spikes[sw_idx], 'ro', markersize=9, zorder=5) 
-        ax4.set_title("Excitabilité (Courbe f-I)", fontweight='bold')
-        ax4.set_xlabel(f"Injection ({unit_i})")
-        ax4.set_ylabel("Nombre de PA")
+        ax4.set_title("f-I Curve", fontweight='bold')
+        ax4.set_xlabel(f"Current ({unit_i})"); ax4.set_ylabel("Spike count")
         
         st.pyplot(fig)
 
         # --- EXPORT ---
         st.divider()
-        st.subheader("📥 Exportation des Résultats")
-        
+        st.subheader(T["export"][lang])
         col_exp1, col_exp2 = st.columns(2)
         
         df_global = pd.DataFrame({
-            "Fichier": [uploaded_file.name],
-            "Vrest_mV": [v_rest_final],
-            "Rin_MOhms": [rin],
-            "Cm_pF": [cm],
-            "Tau_ms": [tau],
-            "Rheobase_I": [rheo_i],
-            "Rheobase_mV": [rheo_v]
+            "File": [uploaded_file.name], "Vrest_mV": [v_rest_final], "Rin_MOhms": [rin],
+            "Cm_pF": [cm], "Tau_ms": [tau], "Rheobase_I": [rheo_i], "Rheobase_mV": [rheo_v]
         })
-        col_exp1.download_button("💾 Exporter le Profil Global (CSV)", 
-                                 df_global.to_csv(index=False).encode('utf-8'), 
-                                 f"{uploaded_file.name}_Profil_Global.csv",
-                                 use_container_width=True)
+        col_exp1.download_button(T["exp_global"][lang], df_global.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Global.csv", use_container_width=True)
 
         df_sweeps = pd.DataFrame({
             "Sweep": abf.sweepList, "I_inj": courants, "Nb_AP_par_step": n_spikes,
             "V_steady": v_stat, "V_threshold": v_thresh_list, "AP_Amp": ap_amps, 
             "AP_Width_ms": ap_widths, "AP_Rise_ms": ap_rise, "AP_Decay_ms": ap_decay, "AP_AHP": ap_ahp
         })
-        col_exp2.download_button("💾 Exporter les Données par Sweep (CSV)", 
-                                 df_sweeps.to_csv(index=False).encode('utf-8'), 
-                                 f"{uploaded_file.name}_Data_Sweeps.csv",
-                                 use_container_width=True)
+        col_exp2.download_button(T["exp_sweeps"][lang], df_sweeps.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Sweeps.csv", use_container_width=True)
 
-        # --- FORMALISME ---
+        # --- README, FORMALISME & CITATION ---
         st.divider()
-        with st.expander("📖 Aide Mémoire : Formalisme, Biophysique & Limites"):
-            st.markdown("### 1. Mesure de la Capacitance Membranaire ($C_m$)")
-            st.write("Le neurone est modélisé par un circuit RC simple :")
-            st.latex(r"C_m = \frac{\tau_m}{R_{in}}")
-            st.markdown("""
-            * **Rin (Résistance d'entrée) :** Extraite par régression linéaire sur les 4 premiers échelons hyperpolarisants.
-            * **$\tau_m$ (Constante de temps) :** Calculée au point de charge de **63.2%** de l'amplitude stationnaire.
-            * **Limites du Space-Clamp :** Dans les neurones à morphologie complexe, l'erreur de *space-clamp* est inévitable. La capacitance apparente peut être sous-estimée car les dendrites distales ne sont pas isopotentielles avec le soma.
-            """)
-            st.markdown("---")
-            st.markdown("### 2. Morphométrie du Potentiel d'Action")
-            st.markdown("""
-            * **Seuil ($V_{threshold}$) :** Instant où $dV/dt$ dépasse **15 mV/ms** (valeur par défaut). L'algorithme applique un filtre Gaussien préalable pour s'affranchir du bruit à haute fréquence de l'amplificateur.
-            * **Half-Width :** Largeur à mi-hauteur du pic. Un élargissement peut indiquer une altération des canaux $K^+$ ou une adaptation pathologique.
-            * **Rise/Decay Time :** Calculés strictement sur les segments 10-90% de l'amplitude absolue du PA pour une robustesse maximale, avec une fenêtre d'analyse dynamique s'adaptant à l'élargissement progressif des potentiels d'action.
-            """)
+        with st.expander(T["readme_title"][lang]):
+            if lang == "Français":
+                st.markdown("""
+                ### 📄 README (Mode d'emploi)
+                Cet outil est conçu pour le traitement par lots et l'extraction biophysique de traces *Current-Clamp* (.abf).
+                1. Chargez votre fichier via le panneau latéral.
+                2. Réglez le **Seuil dV/dt (15 mV/ms par défaut)**. C'est l'étalon-or pour détecter l'ouverture massive des canaux sodiques.
+                3. Inspectez visuellement la qualité du *seal* et les potentielles instabilités de Vrest.
+                4. Exportez le profil biophysique global et les données métriques par échelons pour vos analyses statistiques (GraphPad, R, Python).
+
+                ### 🧠 Formalisme & Limites
+                * **Capacitance ($C_m = \\tau_m / R_{in}$) :** Calculée au point de charge de 63.2%. *Limite (Space-Clamp)* : Dans des neurones à arborescence dendritique riche (ex: neurones pyramidaux CA1/PFC, ou modèles de pathologies comme l'X Fragile), $C_m$ peut être sous-estimée.
+                * **Decay Time (NaN) :** Si la métrique `Decay` indique `NaN`, c'est que le neurone n'a pas repolarisé sous les 10% de son amplitude dans une fenêtre de 100 ms (bloc de dépolarisation, inactivation $K^+$). C'est un paramètre biologique pertinent.
+
+                ### 🎓 Citation
+                Si vous utilisez ce code ou ce pipeline pour une publication scientifique, merci d'inclure le DOI et la citation suivante :
+                > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.* > **DOI:** `10.5281/zenodo.XXXXXXX` *(Placeholder)*
+                > **Github:** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
+                """)
+            else:
+                st.markdown("""
+                ### 📄 README (Instructions)
+                This tool is designed for batch processing and biophysical extraction of *Current-Clamp* traces (.abf).
+                1. Upload your file via the sidebar.
+                2. Adjust the **dV/dt Threshold (default 15 mV/ms)**. This is the gold standard for detecting massive sodium channel opening.
+                3. Visually inspect the seal quality and any potential Vrest instabilities.
+                4. Export the global biophysical profile and sweep-by-sweep metric data for statistical analysis.
+
+                ### 🧠 Formalism & Limitations
+                * **Capacitance ($C_m = \\tau_m / R_{in}$) :** Calculated at the 63.2% charge point. *Limitation (Space-Clamp)*: In neurons with complex dendritic arborizations (e.g., CA1/PFC pyramidal neurons, or disease models like Fragile X), $C_m$ may be underestimated.
+                * **Decay Time (NaN) :** If the `Decay` metric shows `NaN`, it means the neuron did not repolarize below 10% of its amplitude within a 100 ms window (depolarization block, $K^+$ inactivation). This is a biologically relevant parameter.
+
+                ### 🎓 Citation
+                If you use this code or pipeline for a scientific publication, please include the DOI and following citation:
+                > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.* > **DOI:** `10.5281/zenodo.XXXXXXX` *(Placeholder)*
+                > **Github:** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
+                """)
 
     finally:
         if os.path.exists(tmp_filepath): os.remove(tmp_filepath)
