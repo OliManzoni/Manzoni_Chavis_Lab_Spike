@@ -80,16 +80,30 @@ if uploaded_file is not None:
                         vt = seg[idx_t_seg]
                         idx_t_glob = s_start + idx_t_seg
                         amp = trace_win[pk_idx] - vt
+                        
                         if amp > 0:
                             v50 = vt + 0.5*amp; v10 = vt + 0.1*amp; v90 = vt + 0.9*amp
                             up = trace_win[idx_t_glob:pk_idx]
-                            dn = trace_win[pk_idx:min(len(trace_win), pk_idx+int(sr*0.01))]
+                            
+                            # --- FENÊTRE DYNAMIQUE (Correction d'inactivation/broadening) ---
+                            # S'adapte pour capter le decay complet même en cas d'élargissement massif du PA
+                            if num_spikes > 1:
+                                dn_end = peaks[1] 
+                            else:
+                                dn_end = min(len(trace_win), pk_idx + int(sr * 0.05)) # Tolérance max 50 ms
+                                
+                            dn = trace_win[pk_idx:dn_end]
+                            # -----------------------------------------------------------------
+                            
                             r10 = np.where(up >= v10)[0]; r90 = np.where(up >= v90)[0]
                             if len(r10)>0 and len(r90)>0: rise = (r90[0]-r10[0])*dt_ms
+                            
                             d90 = np.where(dn <= v90)[0]; d10 = np.where(dn <= v10)[0]
                             if len(d90)>0 and len(d10)>0: decay = (d10[0]-d90[0])*dt_ms
+                            
                             wup = np.where(up >= v50)[0]; wdn = np.where(dn <= v50)[0]
                             if len(wup)>0 and len(wdn)>0: width = ((pk_idx+wdn[0])-(idx_t_glob+wup[0]))*dt_ms
+                            
                             ahp = np.min(dn)
 
             courants.append(i_cmd); v_stat.append(v_s); v_peak.append(v_p)
@@ -111,14 +125,13 @@ if uploaded_file is not None:
                 tau = (cross_t[0]/sr)*1000.0
                 cm = (tau/rin)*1000.0 if rin>0 else np.nan
                 
-        # Extraction de la Rhéobase Globale (mV et I)
+        # Extraction de la Rhéobase Globale
         rheo_idx_global = next((i for i, count in enumerate(n_spikes) if count > 0), None)
         rheo_v = v_thresh_list[rheo_idx_global] if rheo_idx_global is not None else np.nan
         rheo_i = courants[rheo_idx_global] if rheo_idx_global is not None else np.nan
 
         # --- DASHBOARD ---
         st.subheader("📊 Propriétés Intrinsèques Globales")
-        # Passage à 5 colonnes pour intégrer la Rhéobase
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Vrest", f"{v_rest_final:.1f} mV")
         c2.metric("Rin", f"{rin:.1f} MΩ")
@@ -202,7 +215,6 @@ if uploaded_file is not None:
         
         col_exp1, col_exp2 = st.columns(2)
         
-        # Fichier 1 : Profil Global (1 ligne par cellule)
         df_global = pd.DataFrame({
             "Fichier": [uploaded_file.name],
             "Vrest_mV": [v_rest_final],
@@ -217,7 +229,6 @@ if uploaded_file is not None:
                                  f"{uploaded_file.name}_Profil_Global.csv",
                                  use_container_width=True)
 
-        # Fichier 2 : Data par Sweep (Cinétiques)
         df_sweeps = pd.DataFrame({
             "Sweep": abf.sweepList, "I_inj": courants, "Nb_AP_par_step": n_spikes,
             "V_steady": v_stat, "V_threshold": v_thresh_list, "AP_Amp": ap_amps, 
@@ -228,7 +239,7 @@ if uploaded_file is not None:
                                  f"{uploaded_file.name}_Data_Sweeps.csv",
                                  use_container_width=True)
 
-        # --- FORMALISME COMPLET ---
+        # --- FORMALISME ---
         st.divider()
         with st.expander("📖 Aide Mémoire : Formalisme, Biophysique & Limites"):
             st.markdown("### 1. Mesure de la Capacitance Membranaire ($C_m$)")
@@ -237,14 +248,14 @@ if uploaded_file is not None:
             st.markdown("""
             * **Rin (Résistance d'entrée) :** Extraite par régression linéaire sur les 4 premiers échelons hyperpolarisants.
             * **$\tau_m$ (Constante de temps) :** Calculée au point de charge de **63.2%** de l'amplitude stationnaire.
-            * **Limites du Space-Clamp :** Dans les neurones à morphologie complexe (ex: modèles FXS, Reeler ou neurones pyramidaux), l'erreur de *space-clamp* est inévitable. La capacitance apparente peut être sous-estimée car les dendrites distales ne sont pas isopotentielles avec le soma.
+            * **Limites du Space-Clamp :** Dans les neurones à morphologie complexe, l'erreur de *space-clamp* est inévitable. La capacitance apparente peut être sous-estimée car les dendrites distales ne sont pas isopotentielles avec le soma.
             """)
             st.markdown("---")
             st.markdown("### 2. Morphométrie du Potentiel d'Action")
             st.markdown("""
             * **Seuil ($V_{threshold}$) :** Instant où $dV/dt$ dépasse **15 mV/ms** (valeur par défaut). L'algorithme applique un filtre Gaussien préalable pour s'affranchir du bruit à haute fréquence de l'amplificateur.
-            * **Half-Width :** Largeur à mi-hauteur du pic (entre la montée et la descente). Un élargissement peut indiquer une altération des canaux $K^+$ ou une immaturité neuronale.
-            * **Rise/Decay Time :** Calculés strictement sur les segments 10-90% de l'amplitude absolue du PA pour une robustesse maximale.
+            * **Half-Width :** Largeur à mi-hauteur du pic. Un élargissement peut indiquer une altération des canaux $K^+$ ou une adaptation pathologique.
+            * **Rise/Decay Time :** Calculés strictement sur les segments 10-90% de l'amplitude absolue du PA pour une robustesse maximale, avec une fenêtre d'analyse dynamique s'adaptant à l'élargissement progressif des potentiels d'action.
             """)
 
     finally:
