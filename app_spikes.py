@@ -43,7 +43,7 @@ if uploaded_file is not None:
         # DÉTECTION AUTO DES UNITÉS (Via Telegraph)
         unit_i = abf.sweepUnitsC  
         unit_v = abf.sweepUnitsY
-        st.sidebar.success(f"Unités : {unit_i} / {unit_v}")
+        st.sidebar.success(f"Unités détectées : {unit_i} / {unit_v}")
         
         sr = abf.dataRate
         dt_ms = (1.0 / sr) * 1000.0  
@@ -111,7 +111,7 @@ if uploaded_file is not None:
                 tau = (cross_t[0]/sr)*1000.0
                 cm = (tau/rin)*1000.0 if rin>0 else np.nan
 
-        # --- AFFICHAGE ---
+        # --- AFFICHAGE METRICS ---
         st.subheader("📊 Propriétés Intrinsèques")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Vrest", f"{v_rest_final:.1f} mV")
@@ -119,11 +119,20 @@ if uploaded_file is not None:
         c3.metric("Cm (Capacitance)", f"{cm:.1f} pF")
         c4.metric("Tau_m", f"{tau:.1f} ms")
 
-        # --- VISUALISATION RESTAURÉE ---
         st.divider()
+
+        # --- VISUALISATION INTERACTIVE RESTAURÉE ---
         st.subheader("📈 Visualisations des Traces & Courbes")
-        rheo_idx = next((i for i, count in enumerate(n_spikes) if count > 0), 0)
-        sw_idx = st.slider("Sweep à afficher", 0, abf.sweepCount-1, int(rheo_idx))
+        
+        # RESTAURATION : Contrôles interactifs divisés en deux colonnes
+        col_v1, col_v2 = st.columns(2)
+        with col_v1:
+            rheo_idx = next((i for i, count in enumerate(n_spikes) if count > 0), 0)
+            sw_idx = st.slider("Sélectionner un Sweep individuel", 0, abf.sweepCount-1, int(rheo_idx))
+        with col_v2:
+            stk_indices = st.multiselect("Sélectionner les sweeps pour l'Overlay", 
+                                         list(range(abf.sweepCount)), 
+                                         default=[0, abf.sweepCount//2, abf.sweepCount-1])
         
         plt.style.use('seaborn-v0_8-white')
         fig = plt.figure(figsize=(16, 10))
@@ -135,38 +144,54 @@ if uploaded_file is not None:
         ax1.plot(abf.sweepX, abf.sweepY, color='black', lw=1)
         if not np.isnan(v_thresh_list[sw_idx]):
             ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.6, label="Seuil")
-        ax1.set_title(f"Trace Sweep {sw_idx} ({courants[sw_idx]:.1f} {unit_i})")
+        ax1.set_title(f"Trace Individuelle : Sweep {sw_idx} ({courants[sw_idx]:.1f} {unit_i})", fontweight='bold')
         ax1.set_ylabel("mV")
 
-        # 2. Overlay
+        # 2. Overlay (RESTAURÉ AVEC MULTISELECT ET COULEURS)
         ax2 = fig.add_subplot(gs[0, 1])
-        for s in range(0, abf.sweepCount, max(1, abf.sweepCount//10)):
+        cmap = plt.colormaps.get_cmap('viridis')
+        for i, s in enumerate(stk_indices):
             abf.setSweep(s)
-            ax2.plot(abf.sweepX, abf.sweepY, alpha=0.3, lw=0.5)
-        ax2.set_title("Superposition (Echantillonnage)")
+            ax2.plot(abf.sweepX, abf.sweepY, color=cmap(i/max(1, len(stk_indices))), alpha=0.8, lw=0.8)
+        ax2.set_title(f"Superposition de {len(stk_indices)} traces", fontweight='bold')
+        ax2.set_ylabel("mV")
 
         # 3. Courbe I-V
         ax3 = fig.add_subplot(gs[1, 0])
-        ax3.plot(courants, v_stat, 'o-', label="Steady-state")
-        ax3.plot(courants, v_peak, 'x--', alpha=0.5, label="Peak (Sag)")
-        ax3.axhline(v_rest_final, color='gray', ls=':')
-        ax3.set_xlabel(unit_i); ax3.set_ylabel("mV"); ax3.legend()
+        ax3.plot(courants, v_stat, 'o-', color='tab:blue', label="Steady-state")
+        ax3.plot(courants, v_peak, 'x--', color='tab:blue', alpha=0.5, label="Peak (Sag)")
+        ax3.axhline(v_rest_final, color='gray', ls=':', lw=1)
+        
+        # RESTAURATION : Point rouge sur la courbe I-V
+        ax3.plot(courants[sw_idx], v_stat[sw_idx], 'ro', markersize=9, zorder=5, label=f"Sweep {sw_idx}")
+        
+        ax3.set_title("Relation I-V", fontweight='bold')
+        ax3.set_xlabel(f"Injection de courant ({unit_i})")
+        ax3.set_ylabel("Potentiel membranaire (mV)")
+        ax3.legend()
 
         # 4. Courbe f-I
         ax4 = fig.add_subplot(gs[1, 1])
-        ax4.plot(courants, n_spikes, 's-', color='orange')
-        ax4.set_xlabel(unit_i); ax4.set_ylabel("Nombre de PA")
+        ax4.plot(courants, n_spikes, 's-', color='tab:orange')
+        
+        # RESTAURATION : Point rouge sur la courbe f-I
+        ax4.plot(courants[sw_idx], n_spikes[sw_idx], 'ro', markersize=9, zorder=5)
+        
+        ax4.set_title("Excitabilité (Courbe f-I)", fontweight='bold')
+        ax4.set_xlabel(f"Injection de courant ({unit_i})")
+        ax4.set_ylabel("Nombre de Potentiels d'Action")
         
         st.pyplot(fig)
 
         # --- EXPORT ---
-        st.subheader("📥 Exportation")
+        st.divider()
+        st.subheader("📥 Exportation des Résultats")
         df_exp = pd.DataFrame({
             "Sweep": abf.sweepList, "I_inj": courants, "Nb_AP_par_step": n_spikes,
             "V_steady": v_stat, "V_threshold": v_thresh_list, "AP_Amp": ap_amps, 
             "AP_Width_ms": ap_widths, "AP_Rise_ms": ap_rise, "AP_Decay_ms": ap_decay, "AP_AHP": ap_ahp
         })
-        st.download_button("💾 Télécharger les données complètes (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_results.csv")
+        st.download_button("💾 Télécharger les données morphométriques (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_results.csv")
 
         # --- AIDE MÉMOIRE ---
         with st.expander("📖 Aide Mémoire : Formalisme & Méthode de Capacitance"):
@@ -174,7 +199,7 @@ if uploaded_file is not None:
             st.latex(r"C_m = \frac{\tau_m}{R_{in}}")
             st.markdown("""
             * **Extraction :** $R_{in}$ est calculée sur les pulses faibles pour rester en zone linéaire. $\\tau_m$ est le temps de charge à 63.2%.
-            * **Limites (Space-Clamp) :** Dans les neurones complexes (ex: modèles FXS ou Reeler), les dendrites distales ne sont pas isopotentielles. Cela induit une erreur systématique où $C_m$ est sous-estimée car l'amplificateur ne voit qu'une fraction de la membrane totale.
+            * **Limites (Space-Clamp) :** Dans les neurones complexes, les dendrites distales ne sont pas isopotentielles. Cela induit une erreur systématique où $C_m$ est sous-estimée car l'amplificateur ne voit qu'une fraction de la membrane totale.
             * **Morphométrie PA :** Le seuil est détecté à **15 mV/ms** sur la dérivée lissée. La demi-largeur (*half-width*) est un marqueur de la cinétique des canaux potassiques.
             """)
 
