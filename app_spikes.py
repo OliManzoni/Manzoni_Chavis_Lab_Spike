@@ -11,16 +11,16 @@ import os
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Manzoni Lab - Neural Excitability", layout="wide")
 
-# --- EN-TÊTE ---
+# --- EN-TÊTE INSTITUTIONNEL ---
 col_l, col_r = st.columns([2, 5]) 
 with col_l:
     try: 
         st.image("logo_chavis_final.png", width=360) 
     except: 
-        st.info("Manzoni Lab - Neural Analysis") 
+        st.info("Manzoni Lab - Neurosciences") 
 with col_r:
     st.markdown("# Pipeline Expert : Excitabilité & Morphométrie")
-    st.markdown("### Analyse de la Plasticité Synaptique | Standard Nature/Science")
+    st.markdown("### Analyse de la Plasticité Synaptique | Standard de Publication")
 
 st.divider()
 
@@ -40,7 +40,7 @@ if uploaded_file is not None:
     try:
         abf = pyabf.ABF(tmp_filepath)
         
-        # DÉTECTION AUTO DES UNITÉS (Via Telegraph)
+        # DÉTECTION AUTOMATIQUE DES UNITÉS (Via Telegraph)
         unit_i = abf.sweepUnitsC  
         unit_v = abf.sweepUnitsY
         st.sidebar.success(f"Unités détectées : {unit_i} / {unit_v}")
@@ -49,7 +49,7 @@ if uploaded_file is not None:
         dt_ms = (1.0 / sr) * 1000.0  
         idx_start, idx_end = int(sr * 0.1), int(sr * 0.6) 
         
-        # Listes d'extraction
+        # Initialisation des listes
         courants, v_stat, v_peak, v_rest_list, n_spikes = [], [], [], [], []
         v_thresh_list, ap_amps, ap_widths, ap_rise, ap_decay, ap_ahp = [], [], [], [], [], []
         
@@ -111,8 +111,8 @@ if uploaded_file is not None:
                 tau = (cross_t[0]/sr)*1000.0
                 cm = (tau/rin)*1000.0 if rin>0 else np.nan
 
-        # --- AFFICHAGE METRICS ---
-        st.subheader("📊 Propriétés Intrinsèques")
+        # --- DASHBOARD ---
+        st.subheader("📊 Propriétés Intrinsèques Globales")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Vrest", f"{v_rest_final:.1f} mV")
         c2.metric("Rin", f"{rin:.1f} MΩ")
@@ -121,10 +121,10 @@ if uploaded_file is not None:
 
         st.divider()
 
-        # --- VISUALISATION INTERACTIVE RESTAURÉE ---
+        # --- VISUALISATION INTERACTIVE & MORPHOLOGIE DYNAMIQUE ---
         st.subheader("📈 Visualisations des Traces & Courbes")
         
-        # RESTAURATION : Contrôles interactifs divisés en deux colonnes
+        # 1. Contrôles utilisateurs
         col_v1, col_v2 = st.columns(2)
         with col_v1:
             rheo_idx = next((i for i, count in enumerate(n_spikes) if count > 0), 0)
@@ -134,52 +134,62 @@ if uploaded_file is not None:
                                          list(range(abf.sweepCount)), 
                                          default=[0, abf.sweepCount//2, abf.sweepCount-1])
         
+        # 2. Affichage dynamique de la morphologie (lié au curseur)
+        st.markdown(f"**⚡ Morphologie du 1er PA pour le Sweep {sw_idx} ({courants[sw_idx]:.1f} {unit_i})**")
+        
+        if n_spikes[sw_idx] > 0:
+            c_ap1, c_ap2, c_ap3, c_ap4, c_ap5 = st.columns(5)
+            c_ap1.metric("Amplitude", f"{ap_amps[sw_idx]:.1f} mV")
+            c_ap2.metric("Half-Width", f"{ap_widths[sw_idx]:.2f} ms")
+            c_ap3.metric("Rise (10-90%)", f"{ap_rise[sw_idx]:.2f} ms")
+            c_ap4.metric("Decay (90-10%)", f"{ap_decay[sw_idx]:.2f} ms")
+            c_ap5.metric("AHP (Min)", f"{ap_ahp[sw_idx]:.1f} mV")
+        else:
+            st.info(f"Trace Passive (I = {courants[sw_idx]:.1f} {unit_i}) : Aucun Potentiel d'Action détecté.")
+            
+        st.write("") # Espace avant les graphiques
+        
+        # 3. Préparation de la figure Matplotlib
         plt.style.use('seaborn-v0_8-white')
         fig = plt.figure(figsize=(16, 10))
         gs = fig.add_gridspec(2, 2)
         
-        # 1. Trace Individuelle
+        # Trace Individuelle
         ax1 = fig.add_subplot(gs[0, 0])
         abf.setSweep(sw_idx)
         ax1.plot(abf.sweepX, abf.sweepY, color='black', lw=1)
         if not np.isnan(v_thresh_list[sw_idx]):
-            ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.6, label="Seuil")
-        ax1.set_title(f"Trace Individuelle : Sweep {sw_idx} ({courants[sw_idx]:.1f} {unit_i})", fontweight='bold')
-        ax1.set_ylabel("mV")
+            ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.6, label="Seuil dV/dt")
+            ax1.legend(loc='upper right')
+        ax1.set_title(f"Trace Individuelle : Sweep {sw_idx}", fontweight='bold')
+        ax1.set_ylabel("Potentiel (mV)")
 
-        # 2. Overlay (RESTAURÉ AVEC MULTISELECT ET COULEURS)
+        # Overlay
         ax2 = fig.add_subplot(gs[0, 1])
         cmap = plt.colormaps.get_cmap('viridis')
         for i, s in enumerate(stk_indices):
             abf.setSweep(s)
             ax2.plot(abf.sweepX, abf.sweepY, color=cmap(i/max(1, len(stk_indices))), alpha=0.8, lw=0.8)
         ax2.set_title(f"Superposition de {len(stk_indices)} traces", fontweight='bold')
-        ax2.set_ylabel("mV")
+        ax2.set_ylabel("Potentiel (mV)")
 
-        # 3. Courbe I-V
+        # Courbe I-V avec Marqueur
         ax3 = fig.add_subplot(gs[1, 0])
         ax3.plot(courants, v_stat, 'o-', color='tab:blue', label="Steady-state")
         ax3.plot(courants, v_peak, 'x--', color='tab:blue', alpha=0.5, label="Peak (Sag)")
-        ax3.axhline(v_rest_final, color='gray', ls=':', lw=1)
-        
-        # RESTAURATION : Point rouge sur la courbe I-V
-        ax3.plot(courants[sw_idx], v_stat[sw_idx], 'ro', markersize=9, zorder=5, label=f"Sweep {sw_idx}")
-        
+        ax3.plot(courants[sw_idx], v_stat[sw_idx], 'ro', markersize=9, zorder=5) # Marqueur rouge
         ax3.set_title("Relation I-V", fontweight='bold')
-        ax3.set_xlabel(f"Injection de courant ({unit_i})")
-        ax3.set_ylabel("Potentiel membranaire (mV)")
+        ax3.set_xlabel(f"Injection ({unit_i})")
+        ax3.set_ylabel("Potentiel (mV)")
         ax3.legend()
 
-        # 4. Courbe f-I
+        # Courbe f-I avec Marqueur
         ax4 = fig.add_subplot(gs[1, 1])
         ax4.plot(courants, n_spikes, 's-', color='tab:orange')
-        
-        # RESTAURATION : Point rouge sur la courbe f-I
-        ax4.plot(courants[sw_idx], n_spikes[sw_idx], 'ro', markersize=9, zorder=5)
-        
+        ax4.plot(courants[sw_idx], n_spikes[sw_idx], 'ro', markersize=9, zorder=5) # Marqueur rouge
         ax4.set_title("Excitabilité (Courbe f-I)", fontweight='bold')
-        ax4.set_xlabel(f"Injection de courant ({unit_i})")
-        ax4.set_ylabel("Nombre de Potentiels d'Action")
+        ax4.set_xlabel(f"Injection ({unit_i})")
+        ax4.set_ylabel("Nombre de PA")
         
         st.pyplot(fig)
 
@@ -191,16 +201,25 @@ if uploaded_file is not None:
             "V_steady": v_stat, "V_threshold": v_thresh_list, "AP_Amp": ap_amps, 
             "AP_Width_ms": ap_widths, "AP_Rise_ms": ap_rise, "AP_Decay_ms": ap_decay, "AP_AHP": ap_ahp
         })
-        st.download_button("💾 Télécharger les données morphométriques (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_results.csv")
+        st.download_button("💾 Télécharger les résultats complets (CSV)", df_exp.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_results.csv")
 
-        # --- AIDE MÉMOIRE ---
-        with st.expander("📖 Aide Mémoire : Formalisme & Méthode de Capacitance"):
-            st.markdown("### Modèle RC & Capacitance ($C_m$)")
+        # --- FORMALISME COMPLET ---
+        st.divider()
+        with st.expander("📖 Aide Mémoire : Formalisme, Biophysique & Limites"):
+            st.markdown("### 1. Mesure de la Capacitance Membranaire ($C_m$)")
+            st.write("Le neurone est modélisé par un circuit RC simple :")
             st.latex(r"C_m = \frac{\tau_m}{R_{in}}")
             st.markdown("""
-            * **Extraction :** $R_{in}$ est calculée sur les pulses faibles pour rester en zone linéaire. $\\tau_m$ est le temps de charge à 63.2%.
-            * **Limites (Space-Clamp) :** Dans les neurones complexes, les dendrites distales ne sont pas isopotentielles. Cela induit une erreur systématique où $C_m$ est sous-estimée car l'amplificateur ne voit qu'une fraction de la membrane totale.
-            * **Morphométrie PA :** Le seuil est détecté à **15 mV/ms** sur la dérivée lissée. La demi-largeur (*half-width*) est un marqueur de la cinétique des canaux potassiques.
+            * **Rin (Résistance d'entrée) :** Extraite par régression linéaire sur les 4 premiers échelons hyperpolarisants.
+            * **$\tau_m$ (Constante de temps) :** Calculée au point de charge de **63.2%** de l'amplitude stationnaire.
+            * **Limites du Space-Clamp :** Dans les neurones à morphologie complexe (ex: modèles FXS, Reeler ou neurones pyramidaux), l'erreur de *space-clamp* est inévitable. La capacitance apparente peut être sous-estimée car les dendrites distales ne sont pas isopotentielles avec le soma.
+            """)
+            st.markdown("---")
+            st.markdown("### 2. Morphométrie du Potentiel d'Action")
+            st.markdown("""
+            * **Seuil ($V_{threshold}$) :** Instant où $dV/dt$ dépasse **15 mV/ms** (valeur par défaut). L'algorithme applique un filtre Gaussien préalable pour s'affranchir du bruit à haute fréquence de l'amplificateur.
+            * **Half-Width :** Largeur à mi-hauteur du pic (entre la montée et la descente). Un élargissement peut indiquer une altération des canaux $K^+$ ou une immaturité neuronale.
+            * **Rise/Decay Time :** Calculés strictement sur les segments 10-90% de l'amplitude absolue du PA pour une robustesse maximale.
             """)
 
     finally:
