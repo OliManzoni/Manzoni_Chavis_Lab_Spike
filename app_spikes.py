@@ -1,394 +1,163 @@
 import streamlit as st
-import pyabf
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
-from scipy.signal import find_peaks
-import tempfile
-import os
-import io
+import matplotlib.pyplot as plt
+from scipy import stats
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
+from statsmodels.stats.anova import AnovaRM
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Neural Excitability Pipeline", layout="wide")
+st.set_page_config(page_title="Manzoni Lab - Batch Analysis Expert", layout="wide")
 
-# --- LANGUAGE SELECTION ---
-lang = st.sidebar.selectbox("Language / Langue", ["Français", "English"])
+st.markdown("# 📊 Analyse de Groupe & Statistiques")
+st.markdown("### Consolidation : Propriétés Passives, f-I & I-V")
 
-# --- TRANSLATION DICTIONARY ---
-T = {
-    "Français": {
-        "title": "Pipeline Expert : Excitabilité & Propriétés Intrinsèques",
-        "subtitle": "Manzoni Lab | Traitement par Lot (Batch)",
-        "desc": "*Extraction automatisée haut-débit de la Rhéobase, Sag, Rin, Cm et Tau*",
-        "readme_link": "📖 [Documentation (README)](https://github.com/OliManzoni/Manzoni_Chavis_Lab_EPHYS_Stats/blob/main/README.md)",
-        "doi_link": "🏷️ [DOI: 10.5281/zenodo.19912621](https://doi.org/10.5281/zenodo.19912621)",
-        "sec1_load": "📂 1. Chargement (Batch)",
-        "file_upload": "Charger un ou plusieurs fichiers ABF",
-        "unit_radio": "Unité du canal de courant (I_cmd)",
-        "sec2_settings": "⚙️ 2. Réglages de Détection",
-        "spike_thresh": "Seuil de détection des PA (mV)",
-        "dvdt_thresh": "Seuil dV/dt pour V_threshold (mV/ms)",
-        "tab_indiv": "🔬 Analyse Individuelle",
-        "tab_pop": "🌍 Analyse de Population",
-        "sec3_metrics": "📊 Propriétés Intrinsèques",
-        "m_vrest": "Vrest",
-        "m_rin": "Rin",
-        "m_cm": "Cm",
-        "m_tau": "Tau_m",
-        "m_rheo_i": "Rhéobase (I)",
-        "m_rheo_v": "Rhéobase (V)",
-        "m_sag": "Sag Max",
-        "sec4_export": "📥 Exportation Master (Lot Complet)",
-        "btn_bio": "💾 Profil Biophysique Global (CSV)",
-        "btn_curv": "📊 Données Courbes IV & f-I (CSV)",
-        "sec5_viz": "📈 Exploration Visuelle",
-        "viz_slider": "Sélectionner un Sweep individuel",
-        "viz_multi": "Superposer des sweeps (Overlay)",
-        "p_thresh": "Seuil",
-        "p_iv_title": "Relation I-V",
-        "p_iv_x": "Injection ({})",
-        "p_fi_title": "Courbe f-I",
-        "p_fi_y": "Nombre de PA",
-        "pop_iv_title": "Courbe I-V de Population (Moyenne ± SEM)",
-        "pop_fi_title": "Courbe F-I de Population (Moyenne ± SEM)",
-        "help_title": "📖 Aide Mémoire : Formalisme & Biophysique",
-        "help_text": """
-            * **dV/dt Threshold :** Instant où l'accélération du voltage (dérivée) dépasse la valeur cible (marquant l'ouverture massive des canaux Na+).
-            * **Rin (MΩ) :** Calculé sur la pente de la portion linéaire hyperpolarisante (I < 0).
-            * **Capacitance (pF) :** Déduite de la constante de temps $\\tau_m$ via la relation $C_m = \\tau_m / R_{in}$.
-            * **Sag :** Différence entre le pic transitoire et l'état stationnaire (activité des canaux HCN).
-            """,
-        "info_wait": "Veuillez charger vos fichiers .abf pour activer le pipeline de traitement."
-    },
-    "English": {
-        "title": "Expert Pipeline: Excitability & Intrinsic Properties",
-        "subtitle": "Manzoni Lab | Batch Processing",
-        "desc": "*Automated high-throughput extraction of Rheobase, Sag, Rin, Cm, and Tau*",
-        "readme_link": "📖 [Documentation (README)](https://github.com/OliManzoni/Manzoni_Chavis_Lab_EPHYS_Stats/blob/main/README.md)",
-        "doi_link": "🏷️ [DOI: 10.5281/zenodo.19912621](https://doi.org/10.5281/zenodo.19912621)",
-        "sec1_load": "📂 1. Batch Loading",
-        "file_upload": "Upload one or multiple ABF files",
-        "unit_radio": "Current channel unit (I_cmd)",
-        "sec2_settings": "⚙️ 2. Detection Settings",
-        "spike_thresh": "AP detection threshold (mV)",
-        "dvdt_thresh": "dV/dt threshold for V_threshold (mV/ms)",
-        "tab_indiv": "🔬 Individual Analysis",
-        "tab_pop": "🌍 Population Analysis",
-        "sec3_metrics": "📊 Intrinsic Properties",
-        "m_vrest": "Vrest",
-        "m_rin": "Rin",
-        "m_cm": "Cm",
-        "m_tau": "Tau_m",
-        "m_rheo_i": "Rheobase (I)",
-        "m_rheo_v": "Rheobase (V)",
-        "m_sag": "Sag Max",
-        "sec4_export": "📥 Master Export (Full Batch)",
-        "btn_bio": "💾 Global Biophysical Profile (CSV)",
-        "btn_curv": "📊 IV & f-I Curve Data (CSV)",
-        "sec5_viz": "📈 Visual Exploration",
-        "viz_slider": "Select individual Sweep",
-        "viz_multi": "Overlay sweeps",
-        "p_thresh": "Threshold",
-        "p_iv_title": "I-V Relationship",
-        "p_iv_x": "Injection ({})",
-        "p_fi_title": "f-I Curve",
-        "p_fi_y": "AP Count",
-        "pop_iv_title": "Population I-V Curve (Mean ± SEM)",
-        "pop_fi_title": "Population F-I Curve (Mean ± SEM)",
-        "help_title": "📖 Cheat Sheet: Formalism & Biophysics",
-        "help_text": """
-            * **dV/dt Threshold:** The biophysical threshold is defined as the moment the voltage acceleration exceeds the target value.
-            * **Rin (MΩ):** Calculated on the slope of the linear hyperpolarizing portion (I < 0).
-            * **Capacitance (pF):** Deduced from the time constant $\\tau_m$ via the relationship $C_m = \\tau_m / R_{in}$.
-            * **Sag:** Difference between the transient peak and steady state (HCN channel activity).
-            """,
-        "info_wait": "Please upload your .abf files to activate the processing pipeline."
-    }
-}[lang]
+# --- CHARGEMENT DES DONNÉES ---
+uploaded_files = st.file_uploader("📂 Charger vos fichiers CSV (_Global et _Sweeps)", type="csv", accept_multiple_files=True)
 
-
-# --- EN-TÊTE INSTITUTIONNEL ---
-col_l, col_r = st.columns([2, 5]) 
-with col_l:
-    try: 
-        st.image("logo_chavis_final.png", width=360) 
-    except: 
-        st.info("Manzoni Lab - Branding") 
-with col_r:
-    st.markdown(f"# {T['title']}")
-    st.markdown(f"### {T['subtitle']}")
-    st.markdown(f"#### {T['desc']}")
-    st.markdown(f"{T['readme_link']} &nbsp; | &nbsp; {T['doi_link']}")
-
-st.divider()
-
-# --- BARRE LATÉRALE (SIDEBAR) ---
-st.sidebar.header(T['sec1_load'])
-uploaded_files = st.sidebar.file_uploader(T['file_upload'], type=["abf"], accept_multiple_files=True)
-current_unit = st.sidebar.radio(T['unit_radio'], ["pA", "nA"], index=1)
-
-st.sidebar.header(T['sec2_settings'])
-spike_threshold = st.sidebar.number_input(T['spike_thresh'], value=0.0)
-dvdt_threshold = st.sidebar.number_input(T['dvdt_thresh'], value=15.0)
-
-# --- STRUCTURE DE STOCKAGE GLOBAL ---
-all_bio_data = []
-all_curve_data = []
-
-# --- LOGIQUE ANALYTIQUE BATCH ---
 if uploaded_files:
-    
-    tab_indiv, tab_pop = st.tabs([T['tab_indiv'], T['tab_pop']])
-    
-    st.sidebar.info(f"Traitement de {len(uploaded_files)} fichier(s)...")
-    
-    with tab_indiv:
-        for file_idx, uploaded_file in enumerate(uploaded_files):
-            with st.expander(f"Cellule : {uploaded_file.name}", expanded=(file_idx == 0)):
+    global_dfs = []
+    sweeps_dfs = []
+    cell_ids = set()
+
+    # 1. Lecture et nettoyage des noms
+    for f in uploaded_files:
+        df = pd.read_csv(f)
+        # Extraction propre du Cell_ID (ex: 2026_04_29_0004X)
+        cell_id = f.name.replace("_Global.csv", "").replace("_Sweeps.csv", "").replace(".abf", "")
+        cell_ids.add(cell_id)
+        
+        df['Cell_ID'] = cell_id
+        
+        if "_Global" in f.name:
+            global_dfs.append(df)
+        elif "_Sweeps" in f.name:
+            sweeps_dfs.append(df)
+
+    if not global_dfs or not sweeps_dfs:
+        st.error("⚠️ Erreur : Chargez à la fois les fichiers '_Global.csv' et '_Sweeps.csv'.")
+    else:
+        df_g = pd.concat(global_dfs, ignore_index=True)
+        df_s = pd.concat(sweeps_dfs, ignore_index=True)
+
+        # --- 2. MAPPING DES CONDITIONS (NOUVEAUTÉ) ---
+        st.divider()
+        st.subheader("📝 Assignation des Conditions Biologiques")
+        st.info("💡 **Astuce Manzoni Lab :** Vous pouvez copier une colonne entière depuis Excel (WT, KO...) et la coller directement dans la colonne 'Condition' ci-dessous.")
+        
+        # Création du tableau de mapping interactif
+        mapping_df = pd.DataFrame({
+            "Cell_ID": list(cell_ids),
+            "Condition": ["WT"] * len(cell_ids) # WT par défaut
+        })
+        
+        # Éditeur interactif
+        edited_mapping = st.data_editor(mapping_df, use_container_width=False, hide_index=True)
+        
+        # Fusion des conditions choisies avec les données
+        df_g = df_g.merge(edited_mapping, on="Cell_ID")
+        df_s = df_s.merge(edited_mapping, on="Cell_ID")
+
+        st.divider()
+
+        # --- 3. ANALYSE ET GRAPHES ---
+        tab1, tab2, tab3 = st.tabs(["💎 Paramètres Intrinsèques", "📈 Courbes f-I / I-V", "📝 Rapport Statistique"])
+
+        with tab1:
+            st.subheader("Moyennage des Propriétés Biophysiques")
+            
+            # Exclusion des colonnes texte pour la table
+            numeric_cols = [c for c in df_g.columns if c not in ['Cell_ID', 'File', 'Condition']]
+            
+            # Tableau récapitulatif
+            st.markdown("#### Table : Mean ± SEM par Groupe")
+            if not df_g.empty and len(numeric_cols) > 0:
+                summary_table = df_g.groupby('Condition')[numeric_cols].agg(['mean', 'sem']).stack(level=0)
+                summary_table['Mean ± SEM'] = summary_table.apply(lambda x: f"{x['mean']:.2f} ± {x['sem']:.2f}", axis=1)
+                st.dataframe(summary_table[['Mean ± SEM']].unstack(level=1))
+
+            st.markdown("#### Visualisation (Boxplot)")
+            col_sel = st.selectbox("Sélectionner un paramètre", numeric_cols)
+            
+            fig, ax = plt.subplots(figsize=(6, 4))
+            sns.boxplot(data=df_g, x='Condition', y=col_sel, palette="vlag", ax=ax)
+            sns.stripplot(data=df_g, x='Condition', y=col_sel, color=".3", size=5, ax=ax)
+            ax.set_title(f"Comparaison : {col_sel}")
+            st.pyplot(fig)
+
+        with tab2:
+            st.subheader("Analyse des Courbes de Population")
+            error_type = st.radio("Affichage des barres d'erreur :", ["SEM (Standard Error)", "CI (95% Confiance)"], horizontal=True)
+            err_bar = 'se' if error_type == "SEM" else 95
+
+            c1, c2 = st.columns(2)
+            
+            with c1:
+                st.markdown("**Fréquence de décharge (f-I)**")
+                fig_fi, ax_fi = plt.subplots()
+                # Exclusion des steps hyperpolarisants pour la courbe f-I (courant < 0)
+                df_s_depol = df_s[df_s['I_inj'] >= 0]
+                sns.lineplot(data=df_s_depol, x='I_inj', y='Nb_Spikes', hue='Condition', 
+                             marker='o', errorbar=err_bar, ax=ax_fi)
+                ax_fi.set_ylabel("Nombre de PA (Hz)")
+                ax_fi.set_xlabel("Courant (nA / pA)")
+                st.pyplot(fig_fi)
+
+            with c2:
+                st.markdown("**Relation Courant-Voltage (I-V)**")
+                fig_iv, ax_iv = plt.subplots()
+                sns.lineplot(data=df_s, x='I_inj', y='V_steady', hue='Condition', 
+                             marker='s', errorbar=err_bar, ax=ax_iv)
+                ax_iv.set_ylabel("Voltage (mV)")
+                ax_iv.set_xlabel("Courant (nA / pA)")
+                st.pyplot(fig_iv)
+
+        with tab3:
+            st.subheader("Tests Statistiques (Format Publication)")
+            
+            groups = df_g['Condition'].unique()
+            if len(groups) == 2:
+                st.markdown(f"#### 1. {col_sel} ({groups[0]} vs {groups[1]})")
+                g1 = df_g[df_g['Condition'] == groups[0]][col_sel].dropna()
+                g2 = df_g[df_g['Condition'] == groups[1]][col_sel].dropna()
                 
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".abf") as tmp_file:
-                    tmp_file.write(uploaded_file.getvalue())
-                    tmp_filepath = tmp_file.name
-
-                try:
-                    abf = pyabf.ABF(tmp_filepath)
-                    
-                    courants, voltages_stat, voltages_peak, voltages_rest = [], [], [], []
-                    spike_counts_raw, v_thresholds = [], []
-                    
-                    sr = abf.dataRate
-                    dt_ms = (1.0 / sr) * 1000.0  
-                    idx_start, idx_end = int(sr * 0.1), int(sr * 0.6)
-                    
-                    for sweep in abf.sweepList:
-                        abf.setSweep(sweep)
-                        i_cmd = np.mean(abf.sweepC[idx_start:idx_end])
-                        v_rest = np.mean(abf.sweepY[0:idx_start])
-                        v_stat = np.mean(abf.sweepY[idx_end - int(sr*0.05) : idx_end])
-                        
-                        v_peak = np.min(abf.sweepY[idx_start:idx_end]) if i_cmd < 0 else np.max(abf.sweepY[idx_start:idx_end])
-                        
-                        trace_window = abf.sweepY[idx_start:idx_end]
-                        peaks, _ = find_peaks(trace_window, height=spike_threshold)
-                        num_spikes = len(peaks)
-                        
-                        v_thresh_sweep = np.nan
-                        if num_spikes > 0:
-                            first_peak_idx = peaks[0]
-                            search_start = max(0, first_peak_idx - int(sr * 0.005))
-                            segment = trace_window[search_start:first_peak_idx]
-                            if len(segment) > 1:
-                                dvdt = np.diff(segment) / dt_ms
-                                crossings = np.where(dvdt > dvdt_threshold)[0]
-                                v_thresh_sweep = segment[crossings[0]] if len(crossings) > 0 else trace_window[first_peak_idx]
-                        
-                        courants.append(i_cmd); voltages_stat.append(v_stat); voltages_peak.append(v_peak)
-                        voltages_rest.append(v_rest); spike_counts_raw.append(num_spikes); v_thresholds.append(v_thresh_sweep)
-
-                    v_rest_global = np.mean(voltages_rest)
-                    
-                    rheobase_idx = next((i for i, count in enumerate(spike_counts_raw) if count > 0), None)
-                    rheobase_i = courants[rheobase_idx] if rheobase_idx is not None else None
-                    rheobase_v = v_thresholds[rheobase_idx] if rheobase_idx is not None else np.nan
-                    
-                    neg_indices = [i for i, c in enumerate(courants) if c < 0]
-                    rin_mohm, tau_m_ms, cm_pf = np.nan, np.nan, np.nan
-                    if neg_indices:
-                        neg_indices_sorted = sorted(neg_indices, key=lambda i: abs(courants[i]))[:4]
-                        i_neg = [courants[i] for i in neg_indices_sorted] + [0]
-                        v_neg = [voltages_stat[i] for i in neg_indices_sorted] + [v_rest_global]
-                        rin_mohm = np.polyfit(i_neg, v_neg, 1)[0] * (1 if current_unit == "nA" else 1000)
-                        
-                        idx_t = sorted(neg_indices, key=lambda i: abs(courants[i]))[0]
-                        abf.setSweep(idx_t)
-                        v_baseline = np.mean(abf.sweepY[idx_start-int(sr*0.01):idx_start])
-                        v_target = v_baseline + 0.632 * (voltages_stat[idx_t] - v_baseline)
-                        cross = np.where(abf.sweepY[idx_start:idx_end] <= v_target)[0]
-                        if len(cross) > 0:
-                            tau_m_ms = (cross[0] / sr) * 1000.0
-                            cm_pf = (tau_m_ms / rin_mohm) * 1000.0 if rin_mohm > 0 else np.nan
-
-                    sag_max = voltages_stat[np.argmin(courants)] - voltages_peak[np.argmin(courants)]
-                    rheo_scientific = rheobase_i * (1e-12 if current_unit == 'pA' else 1e-9) if rheobase_i else np.nan
-
-                    all_bio_data.append({
-                        "Fichier": uploaded_file.name, "Vrest_mV": v_rest_global, "Rin_Mohm": rin_mohm, 
-                        "Cm_pF": cm_pf, "Tau_ms": tau_m_ms, "Rheo_I_A": rheo_scientific, 
-                        "Rheo_V_mV": rheobase_v, "Sag_Max_mV": sag_max
-                    })
-                    
-                    df_curv = pd.DataFrame({
-                        "Fichier": [uploaded_file.name] * abf.sweepCount,
-                        "Sweep": list(range(abf.sweepCount)), "I_inj": courants, "V_steady": voltages_stat, 
-                        "V_peak": voltages_peak, "V_threshold": v_thresholds, "Spikes_Raw": spike_counts_raw
-                    })
-                    all_curve_data.append(df_curv)
-
-                    st.markdown(f"**{T['sec3_metrics']}**")
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric(T['m_vrest'], f"{v_rest_global:.1f} mV")
-                    c2.metric(T['m_rin'], f"{rin_mohm:.1f} MΩ" if not np.isnan(rin_mohm) else "N/A")
-                    c3.metric(T['m_cm'], f"{cm_pf:.1f} pF" if not np.isnan(cm_pf) else "N/A")
-                    c4.metric(T['m_tau'], f"{tau_m_ms:.1f} ms" if not np.isnan(tau_m_ms) else "N/A")
-                    
-                    c5, c6, c7 = st.columns(3)
-                    c5.metric(T['m_rheo_i'], f"{rheo_scientific:.2e} A" if not np.isnan(rheo_scientific) else "N/A")
-                    c6.metric(T['m_rheo_v'], f"{rheobase_v:.1f} mV" if not np.isnan(rheobase_v) else "N/A")
-                    c7.metric(T['m_sag'], f"{sag_max:.1f} mV")
-
-                    st.divider()
-
-                    st.markdown(f"**{T['sec5_viz']}**")
-                    col_v1, col_v2 = st.columns(2)
-                    with col_v1:
-                        if abf.sweepCount > 1:
-                            sw_idx = st.slider(T['viz_slider'], 0, abf.sweepCount - 1, 0, key=f"slide_{uploaded_file.name}")
-                        else:
-                            sw_idx = 0
-                            st.info("Trace unique détectée (1 seul sweep).")
-                    with col_v2:
-                        default_sweeps = list(set([0, abf.sweepCount//2, abf.sweepCount-1]))
-                        stk_indices = st.multiselect(T['viz_multi'], list(range(abf.sweepCount)), default=default_sweeps, key=f"multi_{uploaded_file.name}")
-
-                    plt.switch_backend('Agg') 
-                    plt.style.use('seaborn-v0_8-paper')
-                    fig = plt.figure(figsize=(18, 14), dpi=110)
-                    gs = fig.add_gridspec(3, 2)
-                    
-                    def clean_ax(ax):
-                        ax.spines['top'].set_visible(False)
-                        ax.spines['right'].set_visible(False)
-                        ax.tick_params(labelsize=10)
-
-                    ax0 = fig.add_subplot(gs[0, 0])
-                    abf.setSweep(sw_idx)
-                    ax0.plot(abf.sweepX, abf.sweepY, color='black', lw=1)
-                    ax0.set_title(f"Sweep {sw_idx} ({courants[sw_idx]:.1f} {current_unit})", fontweight='bold')
-                    if not np.isnan(v_thresholds[sw_idx]):
-                        ax0.axhline(v_thresholds[sw_idx], color='green', ls=':', label=T['p_thresh'])
-                    clean_ax(ax0)
-
-                    ax1 = fig.add_subplot(gs[0, 1])
-                    cmap = plt.colormaps.get_cmap('viridis')
-                    for i, s in enumerate(stk_indices):
-                        abf.setSweep(s)
-                        ax1.plot(abf.sweepX, abf.sweepY, color=cmap(i/len(stk_indices)), lw=0.8, alpha=0.8)
-                    ax1.set_title(f"Overlay ({len(stk_indices)} sweeps)", fontweight='bold')
-                    clean_ax(ax1)
-                    
-                    ax2 = fig.add_subplot(gs[1, 0])
-                    ax2.plot(courants, voltages_stat, 'o-', label="Steady State")
-                    ax2.plot(courants, voltages_peak, '^--', alpha=0.4, label="Peak (Sag)")
-                    ax2.plot(courants[sw_idx], voltages_stat[sw_idx], 'ro', markersize=9, zorder=5) 
-                    ax2.axvline(0, color='gray', lw=0.5); ax2.axhline(v_rest_global, color='gray', lw=0.5, ls='--')
-                    ax2.set_title(T['p_iv_title'], fontweight='bold')
-                    ax2.set_xlabel(T['p_iv_x'].format(current_unit))
-                    ax2.set_ylabel("Vm (mV)")
-                    ax2.legend(frameon=False)
-                    clean_ax(ax2)
-                    
-                    ax3 = fig.add_subplot(gs[1, 1])
-                    ax3.plot(courants, spike_counts_raw, 's-', color='orange')
-                    ax3.plot(courants[sw_idx], spike_counts_raw[sw_idx], 'ro', markersize=9, zorder=5)
-                    if rheobase_i: ax3.axvline(rheobase_i, color='red', ls='--')
-                    ax3.set_title(T['p_fi_title'], fontweight='bold')
-                    ax3.set_xlabel(T['p_iv_x'].format(current_unit))
-                    ax3.set_ylabel(T['p_fi_y'])
-                    clean_ax(ax3)
-                    
-                    st.pyplot(fig)
-                    plt.close(fig) 
-
-                except Exception as e:
-                    st.error(f"Erreur lors de l'analyse du fichier {uploaded_file.name}: {e}")
-                finally:
-                    if os.path.exists(tmp_filepath): os.remove(tmp_filepath)
-
-    # --- 5. EXPORTATION & VISUALISATION POPULATION (BATCH) ---
-    with tab_pop:
-        if all_bio_data:
-            master_bio_df = pd.DataFrame(all_bio_data)
-            master_curve_df = pd.concat(all_curve_data, ignore_index=True)
-            
-            st.header(T['sec4_export'])
-            exp1, exp2 = st.columns(2)
-            exp1.download_button(
-                T['btn_bio'], 
-                master_bio_df.to_csv(index=False).encode('utf-8'), 
-                "Lot_Global_Biophysique.csv", 
-                "text/csv", 
-                use_container_width=True
-            )
-            
-            exp2.download_button(
-                T['btn_curv'], 
-                master_curve_df.to_csv(index=False).encode('utf-8'), 
-                "Lot_Global_Courbes.csv", 
-                "text/csv", 
-                use_container_width=True
-            )
+                # Normalité (Shapiro) pour choisir entre T-test et Mann-Whitney
+                norm1, norm2 = stats.shapiro(g1)[1], stats.shapiro(g2)[1]
+                if norm1 > 0.05 and norm2 > 0.05:
+                    test_stat, p_val = stats.ttest_ind(g1, g2)
+                    st.write(f"Test Paramétrique (Student t-test) : p = **{p_val:.4f}**")
+                else:
+                    test_stat, p_val = stats.mannwhitneyu(g1, g2)
+                    st.write(f"Test Non-Paramétrique (Mann-Whitney) : p = **{p_val:.4f}**")
             
             st.divider()
-            
-            if len(master_bio_df) > 1:
-                # --- Graphiques de Population (I-V et F-I) ---
-                st.subheader("📊 Courbes de Population (Moyenne ± SEM)")
-                
-                # Regroupement des données par injection de courant (I_inj)
-                # On utilise pd.cut si les courants varient légèrement entre les cellules, 
-                # sinon un groupby direct fonctionne si le protocole est strictement identique.
-                pop_curves = master_curve_df.groupby('I_inj').agg({
-                    'V_steady': ['mean', 'sem'],
-                    'Spikes_Raw': ['mean', 'sem']
-                }).reset_index()
-                
-                # Aplatir le MultiIndex des colonnes généré par agg()
-                pop_curves.columns = ['I_inj', 'V_steady_mean', 'V_steady_sem', 'Spikes_mean', 'Spikes_sem']
-                
-                fig_pop, (ax_pop_iv, ax_pop_fi) = plt.subplots(1, 2, figsize=(16, 6))
-                
-                # I-V de Population
-                ax_pop_iv.errorbar(pop_curves['I_inj'], pop_curves['V_steady_mean'], 
-                                   yerr=pop_curves['V_steady_sem'], fmt='-o', color='teal', capsize=4, lw=2)
-                ax_pop_iv.set_title(T['pop_iv_title'], fontweight='bold')
-                ax_pop_iv.set_xlabel(T['p_iv_x'].format(current_unit))
-                ax_pop_iv.set_ylabel("Vm (mV)")
-                ax_pop_iv.grid(True, linestyle='--', alpha=0.6)
-                
-                # F-I de Population
-                ax_pop_fi.errorbar(pop_curves['I_inj'], pop_curves['Spikes_mean'], 
-                                   yerr=pop_curves['Spikes_sem'], fmt='-s', color='darkorange', capsize=4, lw=2)
-                ax_pop_fi.set_title(T['pop_fi_title'], fontweight='bold')
-                ax_pop_fi.set_xlabel(T['p_iv_x'].format(current_unit))
-                ax_pop_fi.set_ylabel(T['p_fi_y'])
-                ax_pop_fi.grid(True, linestyle='--', alpha=0.6)
-                
-                st.pyplot(fig_pop)
-                plt.close(fig_pop)
-                
-                # --- Boxplots de Population ---
-                st.subheader("🌍 Distribution des Propriétés Biophysiques")
-                plt.figure(figsize=(15, 8))
-                metrics_to_plot = ['Vrest_mV', 'Rin_Mohm', 'Cm_pF', 'Sag_Max_mV']
-                
-                for i, metric in enumerate(metrics_to_plot, 1):
-                    plt.subplot(2, 2, i)
-                    clean_data = master_bio_df[metric].dropna()
-                    if not clean_data.empty:
-                        sns.boxplot(y=clean_data, color='lightgray', width=0.3, fliersize=0)
-                        sns.stripplot(y=clean_data, color='blue', alpha=0.6, jitter=True, size=6)
-                    plt.title(metric.replace('_', ' '))
-                    plt.ylabel("")
-                    
-                plt.tight_layout()
-                st.pyplot(plt)
-                plt.close()
-            else:
-                st.info("Les graphiques de population (I-V, F-I et distributions) nécessitent au moins 2 cellules pour calculer les moyennes et erreurs standard.")
 
-    with st.sidebar.expander(T['help_title']):
-        st.markdown(T['help_text'])
+            st.markdown("#### 2. Courbe f-I (ANOVA à Mesures Répétées)")
+            try:
+                # Filtrer pour n'avoir que les valeurs >= 0 (dépolarisation)
+                df_anova = df_s[df_s['I_inj'] >= 0].copy()
+                
+                # ANOVA RM
+                res_fi = AnovaRM(data=df_anova, depvar='Nb_Spikes', subject='Cell_ID', within=['I_inj'], aggregate_func='mean').fit()
+                st.write("**Effet Intra-Sujet (Courant) :**")
+                st.write(res_fi.summary())
+                
+                # Modèle linéaire pour l'Interaction Groupe * Courant
+                model = ols('Nb_Spikes ~ C(Condition) * I_inj', data=df_anova).fit()
+                st.write("**Interaction (Condition x Courant) :**")
+                st.table(sm.stats.anova_lm(model, typ=2))
+            except Exception as e:
+                st.warning(f"Note sur l'ANOVA RM : Vérifiez que toutes les cellules ont le même protocole d'injection. ({str(e)})")
 
-else:
-    st.info(T['info_wait'])
+        # --- EXPORT ---
+        st.divider()
+        st.subheader("📥 Exportation Master")
+        
+        col_ex1, col_ex2 = st.columns(2)
+        csv_master_g = df_g.to_csv(index=False).encode('utf-8')
+        col_ex1.download_button("💾 Master_Global.csv", csv_master_g, "Master_Global_Consolidated.csv", "text/csv", use_container_width=True)
+        
+        csv_master_s = df_s.to_csv(index=False).encode('utf-8')
+        col_ex2.download_button("💾 Master_Curves.csv", csv_master_s, "Master_Sweeps_Consolidated.csv", "text/csv", use_container_width=True)
