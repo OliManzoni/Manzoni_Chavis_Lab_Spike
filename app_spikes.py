@@ -18,7 +18,7 @@ lang = st.sidebar.radio("Select Interface Language:", ["Français", "English"])
 # Dictionnaire de traduction simplifié
 T = {
     "title": {"Français": "Pipeline Expert : Excitabilité & Morphométrie", "English": "Expert Pipeline: Excitability & Morphometry"},
-    "subtitle": {"Français": "Analyse des Potentiels d'Action", "English": "Action Potentials Analysis | Publication Standard"},
+    "subtitle": {"Français": "Analyse de la Plasticité Synaptique | Standard de Publication", "English": "Synaptic Plasticity Analysis | Publication Standard"},
     "load": {"Français": "📂 1. Chargement", "English": "📂 1. Upload File"},
     "upload_btn": {"Français": "Charger un fichier ABF", "English": "Upload an ABF file"},
     "settings": {"Français": "⚙️ 2. Réglages de Détection", "English": "⚙️ 2. Detection Settings"},
@@ -26,6 +26,7 @@ T = {
     "dvdt_th": {"Français": "Seuil dV/dt (mV/ms)", "English": "dV/dt threshold (mV/ms)"},
     "prominence_th": {"Français": "Proéminence min (mV)", "English": "Min Prominence (mV)"},
     "refractory_ms": {"Français": "Période Réfractaire (ms)", "English": "Refractory Period (ms)"},
+    "artefact_ms": {"Français": "Ignorer l'artefact initial (ms)", "English": "Ignore initial artifact (ms)"},
     "global_metrics": {"Français": "📊 Propriétés Intrinsèques Globales", "English": "📊 Global Intrinsic Properties"},
     "rheo_th": {"Français": "Rhéobase (Seuil)", "English": "Rheobase (Threshold)"},
     "visuals": {"Français": "📈 Visualisations des Traces & Courbes", "English": "📈 Trace & Curve Visualizations"},
@@ -58,11 +59,12 @@ uploaded_file = st.sidebar.file_uploader(T["upload_btn"][lang], type=["abf"])
 
 st.sidebar.header(T["settings"][lang])
 
-# Valeurs par défaut ajustées pour capter l'accommodation et éviter les coupures
-spike_threshold = st.sidebar.number_input(T["spike_th"][lang], value=-10.0)
+# Valeurs permissives pour capter l'accommodation et éviter les coupures
+spike_threshold = st.sidebar.number_input(T["spike_th"][lang], value=-25.0)
 dvdt_threshold = st.sidebar.number_input(T["dvdt_th"][lang], value=10.0)
-prominence_th = st.sidebar.number_input(T["prominence_th"][lang], value=15.0, help="Rejette les oscillations sous-liminaires et le bruit.")
+prominence_th = st.sidebar.number_input(T["prominence_th"][lang], value=8.0, help="Rejette les oscillations sous-liminaires tout en acceptant les spikes fatigués.")
 refractory_ms = st.sidebar.number_input(T["refractory_ms"][lang], value=1.5, help="Empêche le comptage multiple sur un même événement élargi.")
+artefact_ms = st.sidebar.number_input(T["artefact_ms"][lang], value=2.0, help="Délai après le début du pulse pour ignorer le transitoire capacitif de l'amplificateur.")
 
 if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".abf") as tmp_file:
@@ -80,8 +82,9 @@ if uploaded_file is not None:
         dt_ms = (1.0 / sr) * 1000.0  
         idx_start, idx_end = int(sr * 0.1), int(sr * 0.6) 
         
-        # Marge de 50 ms pour capturer la repolarisation du dernier spike sans fausser V_steady
+        # Marge de sécurité (repolarisation lente) et exclusion d'artefact capacitif
         padding_samples = int(sr * 0.05) 
+        artefact_samples = int(sr * (artefact_ms / 1000.0))
         
         courants, v_stat, v_peak, v_rest_list, n_spikes = [], [], [], [], []
         v_thresh_list, ap_amps, ap_widths, ap_rise, ap_decay, ap_ahp = [], [], [], [], [], []
@@ -92,15 +95,16 @@ if uploaded_file is not None:
             i_cmd = np.mean(abf.sweepC[idx_start:idx_end])
             v_r = np.mean(abf.sweepY[0:idx_start])
             
-            # Le calcul des variables passives reste strictement sur la fenêtre d'injection (idx_end)
+            # Le calcul des variables passives reste strictement calé sur l'injection de courant
             v_s = np.mean(abf.sweepY[idx_end - int(sr*0.05) : idx_end])
             v_p = np.min(abf.sweepY[idx_start:idx_end]) if i_cmd < 0 else np.max(abf.sweepY[idx_start:idx_end])
             
-            # NOUVEAU : Fenêtre élargie uniquement pour la recherche de spikes
+            # NOUVEAU FENÊTRAGE DE RECHERCHE (ignore l'artefact de début, englobe la queue de fin)
+            idx_start_search = idx_start + artefact_samples
             idx_end_search = min(idx_end + padding_samples, len(abf.sweepY)) 
-            trace_win = abf.sweepY[idx_start:idx_end_search]
+            trace_win = abf.sweepY[idx_start_search:idx_end_search]
             
-            # Application des contraintes : Proéminence et Période Réfractaire
+            # Application des contraintes topologiques
             distance_samples = int(sr * (refractory_ms / 1000.0))
             peaks, _ = find_peaks(trace_win, height=spike_threshold, prominence=prominence_th, distance=max(1, distance_samples))
             num_spikes = len(peaks)
@@ -146,7 +150,6 @@ if uploaded_file is not None:
                             ahp = np.min(dn)
 
                 # --- FILTRE HEURISTIQUE : BLOC DE DÉPOLARISATION ---
-                # Si le seuil chute dramatiquement ou que la cellule ne repolarise pas
                 if vt < -60 or np.isnan(decay):
                     num_spikes = 0
                     vt, amp, width, rise, decay, ahp = [np.nan]*6
@@ -220,12 +223,25 @@ if uploaded_file is not None:
         ax1 = fig.add_subplot(gs[0, 0])
         abf.setSweep(sw_idx)
         ax1.plot(abf.sweepX, abf.sweepY, color='black', lw=1)
+        
+        # --- DIAGNOSTIC VISUEL : Ajout des points rouges sur les pics détectés ---
+        trace_win_visu = abf.sweepY[idx_start_search:idx_end_search]
+        distance_samples = int(sr * (refractory_ms / 1000.0))
+        peaks_visu, _ = find_peaks(trace_win_visu, height=spike_threshold, prominence=prominence_th, distance=max(1, distance_samples))
+        
+        if len(peaks_visu) > 0:
+            peak_times = abf.sweepX[idx_start_search + peaks_visu]
+            peak_values = abf.sweepY[idx_start_search + peaks_visu]
+            ax1.plot(peak_times, peak_values, 'ro', markersize=5, label=f"Spikes détectés ({len(peaks_visu)})")
+
         if not np.isnan(v_thresh_list[sw_idx]):
-            ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.6, label="Threshold dV/dt")
-            ax1.legend(loc='upper right')
+            ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.3, label="Threshold dV/dt (1er PA)")
+            
+        ax1.legend(loc='upper right')
         ax1.set_title(f"Sweep {sw_idx}", fontweight='bold')
         ax1.set_ylabel("mV")
 
+        # Reste des graphiques
         ax2 = fig.add_subplot(gs[0, 1])
         cmap = plt.colormaps.get_cmap('viridis')
         for i, s in enumerate(stk_indices):
@@ -276,7 +292,7 @@ if uploaded_file is not None:
                 Cet outil est conçu pour le traitement par lots et l'extraction biophysique de traces *Current-Clamp* (.abf).
                 1. Chargez votre fichier via le panneau latéral.
                 2. Ajustez la **Proéminence** et la **Période Réfractaire** pour contrôler la rigueur de détection des événements actifs.
-                3. Inspectez visuellement la qualité du *seal* et les potentielles instabilités de Vrest.
+                3. Utilisez l'**Artefact Initial** si le pipeline manque le tout premier potentiel d'action.
                 4. Exportez le profil biophysique global et les données métriques par échelons pour vos analyses statistiques.
 
                 ### 🧠 Formalisme & Limites
@@ -294,7 +310,7 @@ if uploaded_file is not None:
                 This tool is designed for batch processing and biophysical extraction of *Current-Clamp* traces (.abf).
                 1. Upload your file via the sidebar.
                 2. Adjust the **Prominence** and **Refractory Period** to control the stringency of active event detection.
-                3. Visually inspect the seal quality and any potential Vrest instabilities.
+                3. Use the **Initial Artifact** parameter if the pipeline misses the very first action potential.
                 4. Export the global biophysical profile and sweep-by-sweep metric data for statistical analysis.
 
                 ### 🧠 Formalism & Limitations
