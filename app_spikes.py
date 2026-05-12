@@ -18,7 +18,7 @@ lang = st.sidebar.radio("Select Interface Language:", ["Français", "English"])
 # Dictionnaire de traduction simplifié
 T = {
     "title": {"Français": "Pipeline Expert : Excitabilité & Morphométrie", "English": "Expert Pipeline: Excitability & Morphometry"},
-    "subtitle": {"Français": "Analyse des Potentiels d'Action", "English": "Action Potential Analysis"},
+    "subtitle": {"Français": "Analyse des Potentiels d'Action", "English": "Action Potentials Analysis | Publication Standard"},
     "load": {"Français": "📂 1. Chargement", "English": "📂 1. Upload File"},
     "upload_btn": {"Français": "Charger un fichier ABF", "English": "Upload an ABF file"},
     "settings": {"Français": "⚙️ 2. Réglages de Détection", "English": "⚙️ 2. Detection Settings"},
@@ -57,12 +57,12 @@ st.sidebar.header(T["load"][lang])
 uploaded_file = st.sidebar.file_uploader(T["upload_btn"][lang], type=["abf"])
 
 st.sidebar.header(T["settings"][lang])
-spike_threshold = st.sidebar.number_input(T["spike_th"][lang], value=0.0)
-dvdt_threshold = st.sidebar.number_input(T["dvdt_th"][lang], value=15.0)
 
-# Nouveaux paramètres de rigueur biophysique
-prominence_th = st.sidebar.number_input(T["prominence_th"][lang], value=20.0, help="Rejette les oscillations sous-liminaires et le bruit.")
-refractory_ms = st.sidebar.number_input(T["refractory_ms"][lang], value=2.0, help="Empêche le comptage multiple sur un même événement élargi.")
+# Valeurs par défaut ajustées pour capter l'accommodation et éviter les coupures
+spike_threshold = st.sidebar.number_input(T["spike_th"][lang], value=-10.0)
+dvdt_threshold = st.sidebar.number_input(T["dvdt_th"][lang], value=10.0)
+prominence_th = st.sidebar.number_input(T["prominence_th"][lang], value=15.0, help="Rejette les oscillations sous-liminaires et le bruit.")
+refractory_ms = st.sidebar.number_input(T["refractory_ms"][lang], value=1.5, help="Empêche le comptage multiple sur un même événement élargi.")
 
 if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".abf") as tmp_file:
@@ -80,6 +80,9 @@ if uploaded_file is not None:
         dt_ms = (1.0 / sr) * 1000.0  
         idx_start, idx_end = int(sr * 0.1), int(sr * 0.6) 
         
+        # Marge de 50 ms pour capturer la repolarisation du dernier spike sans fausser V_steady
+        padding_samples = int(sr * 0.05) 
+        
         courants, v_stat, v_peak, v_rest_list, n_spikes = [], [], [], [], []
         v_thresh_list, ap_amps, ap_widths, ap_rise, ap_decay, ap_ahp = [], [], [], [], [], []
         depol_blocks = [] # Traçage des sweeps en bloc de dépolarisation
@@ -88,10 +91,14 @@ if uploaded_file is not None:
             abf.setSweep(sweep)
             i_cmd = np.mean(abf.sweepC[idx_start:idx_end])
             v_r = np.mean(abf.sweepY[0:idx_start])
+            
+            # Le calcul des variables passives reste strictement sur la fenêtre d'injection (idx_end)
             v_s = np.mean(abf.sweepY[idx_end - int(sr*0.05) : idx_end])
             v_p = np.min(abf.sweepY[idx_start:idx_end]) if i_cmd < 0 else np.max(abf.sweepY[idx_start:idx_end])
             
-            trace_win = abf.sweepY[idx_start:idx_end]
+            # NOUVEAU : Fenêtre élargie uniquement pour la recherche de spikes
+            idx_end_search = min(idx_end + padding_samples, len(abf.sweepY)) 
+            trace_win = abf.sweepY[idx_start:idx_end_search]
             
             # Application des contraintes : Proéminence et Période Réfractaire
             distance_samples = int(sr * (refractory_ms / 1000.0))
