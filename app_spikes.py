@@ -24,6 +24,8 @@ T = {
     "settings": {"Français": "⚙️ 2. Réglages de Détection", "English": "⚙️ 2. Detection Settings"},
     "spike_th": {"Français": "Seuil de détection (mV)", "English": "Spike detection threshold (mV)"},
     "dvdt_th": {"Français": "Seuil dV/dt (mV/ms)", "English": "dV/dt threshold (mV/ms)"},
+    "prominence_th": {"Français": "Proéminence min (mV)", "English": "Min Prominence (mV)"},
+    "refractory_ms": {"Français": "Période Réfractaire (ms)", "English": "Refractory Period (ms)"},
     "global_metrics": {"Français": "📊 Propriétés Intrinsèques Globales", "English": "📊 Global Intrinsic Properties"},
     "rheo_th": {"Français": "Rhéobase (Seuil)", "English": "Rheobase (Threshold)"},
     "visuals": {"Français": "📈 Visualisations des Traces & Courbes", "English": "📈 Trace & Curve Visualizations"},
@@ -58,6 +60,10 @@ st.sidebar.header(T["settings"][lang])
 spike_threshold = st.sidebar.number_input(T["spike_th"][lang], value=0.0)
 dvdt_threshold = st.sidebar.number_input(T["dvdt_th"][lang], value=15.0)
 
+# Nouveaux paramètres de rigueur biophysique
+prominence_th = st.sidebar.number_input(T["prominence_th"][lang], value=20.0, help="Rejette les oscillations sous-liminaires et le bruit.")
+refractory_ms = st.sidebar.number_input(T["refractory_ms"][lang], value=2.0, help="Empêche le comptage multiple sur un même événement élargi.")
+
 if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".abf") as tmp_file:
         tmp_file.write(uploaded_file.getvalue())
@@ -76,6 +82,7 @@ if uploaded_file is not None:
         
         courants, v_stat, v_peak, v_rest_list, n_spikes = [], [], [], [], []
         v_thresh_list, ap_amps, ap_widths, ap_rise, ap_decay, ap_ahp = [], [], [], [], [], []
+        depol_blocks = [] # Traçage des sweeps en bloc de dépolarisation
         
         for sweep in abf.sweepList:
             abf.setSweep(sweep)
@@ -85,7 +92,10 @@ if uploaded_file is not None:
             v_p = np.min(abf.sweepY[idx_start:idx_end]) if i_cmd < 0 else np.max(abf.sweepY[idx_start:idx_end])
             
             trace_win = abf.sweepY[idx_start:idx_end]
-            peaks, _ = find_peaks(trace_win, height=spike_threshold)
+            
+            # Application des contraintes : Proéminence et Période Réfractaire
+            distance_samples = int(sr * (refractory_ms / 1000.0))
+            peaks, _ = find_peaks(trace_win, height=spike_threshold, prominence=prominence_th, distance=max(1, distance_samples))
             num_spikes = len(peaks)
             
             vt, amp, width, rise, decay, ahp = [np.nan]*6
@@ -110,7 +120,6 @@ if uploaded_file is not None:
                             v50 = vt + 0.5*amp; v10 = vt + 0.1*amp; v90 = vt + 0.9*amp
                             up = trace_win[idx_t_glob:pk_idx]
                             
-                            # --- CORRECTION DECAY (Tolérance étendue à 100ms) ---
                             if num_spikes > 1:
                                 dn_end = peaks[1] 
                             else:
@@ -129,9 +138,20 @@ if uploaded_file is not None:
                             
                             ahp = np.min(dn)
 
+                # --- FILTRE HEURISTIQUE : BLOC DE DÉPOLARISATION ---
+                # Si le seuil chute dramatiquement ou que la cellule ne repolarise pas
+                if vt < -60 or np.isnan(decay):
+                    num_spikes = 0
+                    vt, amp, width, rise, decay, ahp = [np.nan]*6
+                    depol_blocks.append(sweep)
+
             courants.append(i_cmd); v_stat.append(v_s); v_peak.append(v_p)
             v_rest_list.append(v_r); n_spikes.append(num_spikes); v_thresh_list.append(vt)
             ap_amps.append(amp); ap_widths.append(width); ap_rise.append(rise); ap_decay.append(decay); ap_ahp.append(ahp)
+
+        # --- GESTION DE L'AFFICHAGE DU BLOC DE DÉPOLARISATION ---
+        if depol_blocks:
+            st.warning(f"⚠️ **Bloc de dépolarisation identifié.** Les événements ont été exclus du comptage pour les sweeps : {', '.join(map(str, depol_blocks))}")
 
         # --- CALCULS GLOBAUX ---
         v_rest_final = np.mean(v_rest_list)
@@ -248,13 +268,13 @@ if uploaded_file is not None:
                 ### 📄 README (Mode d'emploi)
                 Cet outil est conçu pour le traitement par lots et l'extraction biophysique de traces *Current-Clamp* (.abf).
                 1. Chargez votre fichier via le panneau latéral.
-                2. Réglez le **Seuil dV/dt (15 mV/ms par défaut)**. C'est l'étalon-or pour détecter l'ouverture massive des canaux sodiques.
+                2. Ajustez la **Proéminence** et la **Période Réfractaire** pour contrôler la rigueur de détection des événements actifs.
                 3. Inspectez visuellement la qualité du *seal* et les potentielles instabilités de Vrest.
-                4. Exportez le profil biophysique global et les données métriques par échelons pour vos analyses statistiques (GraphPad, R, Python).
+                4. Exportez le profil biophysique global et les données métriques par échelons pour vos analyses statistiques.
 
                 ### 🧠 Formalisme & Limites
                 * **Capacitance ($C_m = \\tau_m / R_{in}$) :** Calculée au point de charge de 63.2%. *Limite (Space-Clamp)* : Dans des neurones à arborescence dendritique riche (ex: neurones pyramidaux CA1/PFC, ou modèles de pathologies comme l'X Fragile), $C_m$ peut être sous-estimée.
-                * **Decay Time (NaN) :** Si la métrique `Decay` indique `NaN`, c'est que le neurone n'a pas repolarisé sous les 10% de son amplitude dans une fenêtre de 100 ms (bloc de dépolarisation, inactivation $K^+$). C'est un paramètre biologique pertinent.
+                * **Filtre Heuristique (Bloc de Dépolarisation) :** Si le neurone échoue à repolariser (Decay = NaN) ou si le seuil de dV/dt chute sous -60mV, l'algorithme annule le comptage pour exclure le bruit stochastique sous haute stimulation.
 
                 ### 🎓 Citation
                 Si vous utilisez ce code ou ce pipeline pour une publication scientifique, merci d'inclure le DOI et la citation suivante :
@@ -266,13 +286,13 @@ if uploaded_file is not None:
                 ### 📄 README (Instructions)
                 This tool is designed for batch processing and biophysical extraction of *Current-Clamp* traces (.abf).
                 1. Upload your file via the sidebar.
-                2. Adjust the **dV/dt Threshold (default 15 mV/ms)**. This is the gold standard for detecting massive sodium channel opening.
+                2. Adjust the **Prominence** and **Refractory Period** to control the stringency of active event detection.
                 3. Visually inspect the seal quality and any potential Vrest instabilities.
                 4. Export the global biophysical profile and sweep-by-sweep metric data for statistical analysis.
 
                 ### 🧠 Formalism & Limitations
                 * **Capacitance ($C_m = \\tau_m / R_{in}$) :** Calculated at the 63.2% charge point. *Limitation (Space-Clamp)*: In neurons with complex dendritic arborizations (e.g., CA1/PFC pyramidal neurons, or disease models like Fragile X), $C_m$ may be underestimated.
-                * **Decay Time (NaN) :** If the `Decay` metric shows `NaN`, it means the neuron did not repolarize below 10% of its amplitude within a 100 ms window (depolarization block, $K^+$ inactivation). This is a biologically relevant parameter.
+                * **Heuristic Filter (Depolarization Block) :** If the neuron fails to repolarize (Decay = NaN) or if the dV/dt threshold drops below -60mV, the algorithm resets the spike count to exclude stochastic noise under high stimulation.
 
                 ### 🎓 Citation
                 If you use this code or pipeline for a scientific publication, please include the DOI and following citation:
