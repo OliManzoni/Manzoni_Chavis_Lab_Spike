@@ -18,7 +18,7 @@ lang = st.sidebar.radio("Select Interface Language:", ["Français", "English"])
 # Dictionnaire de traduction simplifié
 T = {
     "title": {"Français": "Pipeline Expert : Excitabilité & Morphométrie", "English": "Expert Pipeline: Excitability & Morphometry"},
-    "subtitle": {"Français": "Analyse de la Plasticité Synaptique | Standard de Publication", "English": "Synaptic Plasticity Analysis | Publication Standard"},
+    "subtitle": {"Français": "Analyse des Potentiels d'Action", "English": "Action Potential Analysis"},
     "load": {"Français": "📂 1. Chargement", "English": "📂 1. Upload File"},
     "upload_btn": {"Français": "Charger un fichier ABF", "English": "Upload an ABF file"},
     "settings": {"Français": "⚙️ 2. Réglages de Détection", "English": "⚙️ 2. Detection Settings"},
