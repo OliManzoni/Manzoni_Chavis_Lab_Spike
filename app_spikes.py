@@ -15,6 +15,7 @@ st.set_page_config(page_title="Manzoni Lab - Excitability Pipeline", layout="wid
 st.sidebar.header("🌍 Language / Langue")
 lang = st.sidebar.radio("Select Interface Language:", ["Français", "English"])
 
+# Dictionnaire de traduction simplifié
 T = {
     "title": {"Français": "Pipeline Expert : Excitabilité & Morphométrie", "English": "Expert Pipeline: Excitability & Morphometry"},
     "subtitle": {"Français": "Analyse de la Plasticité Synaptique | Standard de Publication", "English": "Synaptic Plasticity Analysis | Publication Standard"},
@@ -23,12 +24,17 @@ T = {
     "settings": {"Français": "⚙️ 2. Réglages de Détection", "English": "⚙️ 2. Detection Settings"},
     "spike_th": {"Français": "Seuil de détection (mV)", "English": "Spike detection threshold (mV)"},
     "dvdt_th": {"Français": "Seuil dV/dt (mV/ms)", "English": "dV/dt threshold (mV/ms)"},
-    "prominence_th": {"Français": "Proéminence min (mV)", "English": "Min Prominence (mV)"},
-    "refractory_ms": {"Français": "Période Réfractaire (ms)", "English": "Refractory Period (ms)"},
-    "artefact_ms": {"Français": "Ignorer l'artefact initial (ms)", "English": "Ignore initial artifact (ms)"},
-    "tab_analyse": {"Français": "📈 Dashboard & Visualisation", "English": "📈 Dashboard & Visualization"},
-    "tab_methode": {"Français": "📚 Formalisme & Méthodes", "English": "📚 Formalism & Methods"},
-    "tab_export": {"Français": "📥 Exportation des Résultats", "English": "📥 Export Results"},
+    "global_metrics": {"Français": "📊 Propriétés Intrinsèques Globales", "English": "📊 Global Intrinsic Properties"},
+    "rheo_th": {"Français": "Rhéobase (Seuil)", "English": "Rheobase (Threshold)"},
+    "visuals": {"Français": "📈 Visualisations des Traces & Courbes", "English": "📈 Trace & Curve Visualizations"},
+    "select_sweep": {"Français": "Sélectionner un Sweep individuel", "English": "Select individual Sweep"},
+    "select_overlay": {"Français": "Sélectionner les sweeps pour l'Overlay", "English": "Select sweeps for Overlay"},
+    "morph_title": {"Français": "⚡ Morphologie du 1er PA pour le Sweep", "English": "⚡ 1st AP Morphometry for Sweep"},
+    "no_ap": {"Français": "Trace Passive : Aucun Potentiel d'Action détecté.", "English": "Passive Trace: No Action Potential detected."},
+    "export": {"Français": "📥 Exportation des Résultats", "English": "📥 Export Results"},
+    "exp_global": {"Français": "💾 Exporter le Profil Global (CSV)", "English": "💾 Export Global Profile (CSV)"},
+    "exp_sweeps": {"Français": "💾 Exporter les Données par Sweep (CSV)", "English": "💾 Export Sweep Data (CSV)"},
+    "readme_title": {"Français": "📚 README, Formalisme & Citation", "English": "📚 README, Formalism & Citation"}
 }
 
 # --- EN-TÊTE INSTITUTIONNEL ---
@@ -49,11 +55,8 @@ st.sidebar.header(T["load"][lang])
 uploaded_file = st.sidebar.file_uploader(T["upload_btn"][lang], type=["abf"])
 
 st.sidebar.header(T["settings"][lang])
-spike_threshold = st.sidebar.number_input(T["spike_th"][lang], value=-25.0)
-dvdt_threshold = st.sidebar.number_input(T["dvdt_th"][lang], value=10.0)
-prominence_th = st.sidebar.number_input(T["prominence_th"][lang], value=8.0)
-refractory_ms = st.sidebar.number_input(T["refractory_ms"][lang], value=1.5)
-artefact_ms = st.sidebar.number_input(T["artefact_ms"][lang], value=2.0)
+spike_threshold = st.sidebar.number_input(T["spike_th"][lang], value=0.0)
+dvdt_threshold = st.sidebar.number_input(T["dvdt_th"][lang], value=15.0)
 
 if uploaded_file is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".abf") as tmp_file:
@@ -62,28 +65,20 @@ if uploaded_file is not None:
 
     try:
         abf = pyabf.ABF(tmp_filepath)
+        
         unit_i = abf.sweepUnitsC  
         unit_v = abf.sweepUnitsY
+        st.sidebar.success(f"Units : {unit_i} / {unit_v}")
         
         sr = abf.dataRate
         dt_ms = (1.0 / sr) * 1000.0  
-        
-        # DÉTECTION AUTOMATIQUE DU PULSE
-        abf.setSweep(abf.sweepCount - 1)
-        diff_c = np.diff(abf.sweepC)
-        try:
-            idx_start = np.where(diff_c > 0)[0][0] + 1
-            idx_end = np.where(diff_c < 0)[0][-1] + 1
-        except IndexError:
-            # Fallback
-            idx_start, idx_end = int(sr * 0.1), int(sr * 0.6)
-            
-        padding_samples = int(sr * 0.05) 
-        artefact_samples = int(sr * (artefact_ms / 1000.0))
+        idx_start, idx_end = int(sr * 0.1), int(sr * 0.6) 
         
         courants, v_stat, v_peak, v_rest_list, n_spikes = [], [], [], [], []
         v_thresh_list, ap_amps, ap_widths, ap_rise, ap_decay, ap_ahp = [], [], [], [], [], []
-        depol_blocks = [] 
+        
+        # --- AJOUT AHP : Nouvelle liste pour stocker l'index de l'AHP ---
+        ap_ahp_indices = [] 
         
         for sweep in abf.sweepList:
             abf.setSweep(sweep)
@@ -92,15 +87,12 @@ if uploaded_file is not None:
             v_s = np.mean(abf.sweepY[idx_end - int(sr*0.05) : idx_end])
             v_p = np.min(abf.sweepY[idx_start:idx_end]) if i_cmd < 0 else np.max(abf.sweepY[idx_start:idx_end])
             
-            idx_start_search = idx_start + artefact_samples
-            idx_end_search = min(idx_end + padding_samples, len(abf.sweepY)) 
-            trace_win = abf.sweepY[idx_start_search:idx_end_search]
-            
-            distance_samples = int(sr * (refractory_ms / 1000.0))
-            peaks, _ = find_peaks(trace_win, height=spike_threshold, prominence=prominence_th, distance=max(1, distance_samples))
+            trace_win = abf.sweepY[idx_start:idx_end]
+            peaks, _ = find_peaks(trace_win, height=spike_threshold)
             num_spikes = len(peaks)
             
             vt, amp, width, rise, decay, ahp = [np.nan]*6
+            ahp_idx_val = np.nan # --- AJOUT AHP : Initialisation à NaN ---
             
             if num_spikes > 0:
                 pk_idx = peaks[0]
@@ -121,7 +113,13 @@ if uploaded_file is not None:
                         if amp > 0:
                             v50 = vt + 0.5*amp; v10 = vt + 0.1*amp; v90 = vt + 0.9*amp
                             up = trace_win[idx_t_glob:pk_idx]
-                            dn_end = peaks[1] if num_spikes > 1 else min(len(trace_win), pk_idx + int(sr * 0.1))
+                            
+                            # --- CORRECTION DECAY (Tolérance étendue à 100ms) ---
+                            if num_spikes > 1:
+                                dn_end = peaks[1] 
+                            else:
+                                dn_end = min(len(trace_win), pk_idx + int(sr * 0.1)) # 100 ms
+                                
                             dn = trace_win[pk_idx:dn_end]
                             
                             r10 = np.where(up >= v10)[0]; r90 = np.where(up >= v90)[0]
@@ -133,17 +131,17 @@ if uploaded_file is not None:
                             wup = np.where(up >= v50)[0]; wdn = np.where(dn <= v50)[0]
                             if len(wup)>0 and len(wdn)>0: width = ((pk_idx+wdn[0])-(idx_t_glob+wup[0]))*dt_ms
                             
-                            ahp = np.min(dn)
-
-                # Filtre heuristique (Bloc dépo)
-                if vt < -60 or np.isnan(decay):
-                    num_spikes = 0
-                    vt, amp, width, rise, decay, ahp = [np.nan]*6
-                    depol_blocks.append(sweep)
+                            # --- AJOUT AHP : Extraction de l'index exact du minimum ---
+                            if len(dn) > 0:
+                                ahp_min_local = np.argmin(dn)
+                                ahp = dn[ahp_min_local]
+                                # Calcul de l'index global dans le tableau abf.sweepY complet
+                                ahp_idx_val = idx_start + pk_idx + ahp_min_local
 
             courants.append(i_cmd); v_stat.append(v_s); v_peak.append(v_p)
             v_rest_list.append(v_r); n_spikes.append(num_spikes); v_thresh_list.append(vt)
             ap_amps.append(amp); ap_widths.append(width); ap_rise.append(rise); ap_decay.append(decay); ap_ahp.append(ahp)
+            ap_ahp_indices.append(ahp_idx_val) # --- AJOUT AHP : Sauvegarde de l'index ---
 
         # --- CALCULS GLOBAUX ---
         v_rest_final = np.mean(v_rest_list)
@@ -164,145 +162,142 @@ if uploaded_file is not None:
         rheo_v = v_thresh_list[rheo_idx_global] if rheo_idx_global is not None else np.nan
         rheo_i = courants[rheo_idx_global] if rheo_idx_global is not None else np.nan
 
-        # --- ONGLETS ---
-        tab1, tab2, tab3 = st.tabs([T["tab_analyse"][lang], T["tab_methode"][lang], T["tab_export"][lang]])
+        # --- DASHBOARD ---
+        st.subheader(T["global_metrics"][lang])
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Vrest", f"{v_rest_final:.1f} mV")
+        c2.metric("Rin", f"{rin:.1f} MΩ")
+        c3.metric("Cm (Capacitance)", f"{cm:.1f} pF")
+        c4.metric("Tau_m", f"{tau:.1f} ms")
+        c5.metric(T["rheo_th"][lang], f"{rheo_v:.1f} mV" if not np.isnan(rheo_v) else "N/A")
 
-        with tab1:
-            if depol_blocks:
-                st.warning(f"⚠️ Bloc de dépolarisation identifié. Comptage annulé pour : {', '.join(map(str, depol_blocks))}")
-                
-            st.subheader("📊 Propriétés Intrinsèques")
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            c1.metric("Vrest", f"{v_rest_final:.1f} mV")
-            c2.metric("Rin", f"{rin:.1f} MΩ")
-            c3.metric("Cm (Capacitance)", f"{cm:.1f} pF")
-            c4.metric("Tau_m", f"{tau:.1f} ms")
-            c5.metric("Courant Rhéobase", f"{rheo_i:.1f} {unit_i}" if not np.isnan(rheo_i) else "N/A")
-            c6.metric("Seuil Rhéobase", f"{rheo_v:.1f} mV" if not np.isnan(rheo_v) else "N/A")
+        st.divider()
 
-            st.divider()
+        # --- VISUALISATION INTERACTIVE ---
+        st.subheader(T["visuals"][lang])
+        
+        col_v1, col_v2 = st.columns(2)
+        with col_v1:
+            sw_idx = st.slider(T["select_sweep"][lang], 0, abf.sweepCount-1, int(rheo_idx_global) if rheo_idx_global else 0)
+        with col_v2:
+            stk_indices = st.multiselect(T["select_overlay"][lang], list(range(abf.sweepCount)), default=[0, abf.sweepCount//2, abf.sweepCount-1])
+        
+        st.markdown(f"**{T['morph_title'][lang]} {sw_idx} ({courants[sw_idx]:.1f} {unit_i})**")
+        
+        if n_spikes[sw_idx] > 0:
+            c_ap1, c_ap2, c_ap3, c_ap4, c_ap5 = st.columns(5)
+            c_ap1.metric("Amplitude", f"{ap_amps[sw_idx]:.1f} mV")
+            c_ap2.metric("Half-Width", f"{ap_widths[sw_idx]:.2f} ms")
+            c_ap3.metric("Rise (10-90%)", f"{ap_rise[sw_idx]:.2f} ms")
+            c_ap4.metric("Decay (90-10%)", f"{ap_decay[sw_idx]:.2f} ms")
+            c_ap5.metric("AHP (Min)", f"{ap_ahp[sw_idx]:.1f} mV")
+        else:
+            st.info(T["no_ap"][lang])
             
-            col_v1, col_v2 = st.columns(2)
-            with col_v1:
-                sw_idx = st.slider("Sélectionner le Sweep (Trace 1)", 0, abf.sweepCount-1, int(rheo_idx_global) if rheo_idx_global else 0)
-            with col_v2:
-                stk_indices = st.multiselect("Sélectionner pour l'Overlay", list(range(abf.sweepCount)), default=[0, abf.sweepCount//2, abf.sweepCount-1])
+        st.write("") 
+        
+        plt.style.use('seaborn-v0_8-white')
+        fig = plt.figure(figsize=(16, 10))
+        gs = fig.add_gridspec(2, 2)
+        
+        ax1 = fig.add_subplot(gs[0, 0])
+        abf.setSweep(sw_idx)
+        ax1.plot(abf.sweepX, abf.sweepY, color='black', lw=1)
+        
+        if not np.isnan(v_thresh_list[sw_idx]):
+            ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.6, label="Threshold dV/dt")
             
-            st.markdown(f"**⚡ Morphologie du 1er PA (Sweep {sw_idx})**")
-            if n_spikes[sw_idx] > 0:
-                c_ap1, c_ap2, c_ap3, c_ap4, c_ap5 = st.columns(5)
-                c_ap1.metric("Amplitude", f"{ap_amps[sw_idx]:.1f} mV")
-                c_ap2.metric("Half-Width", f"{ap_widths[sw_idx]:.2f} ms")
-                c_ap3.metric("Rise (10-90%)", f"{ap_rise[sw_idx]:.2f} ms")
-                c_ap4.metric("Decay (90-10%)", f"{ap_decay[sw_idx]:.2f} ms")
-                c_ap5.metric("AHP (Min)", f"{ap_ahp[sw_idx]:.1f} mV")
-            else:
-                st.info("Trace Passive : Aucun Potentiel d'Action détecté.")
-                
-            # GRAPHIQUES (2x2 Grid)
-            plt.style.use('seaborn-v0_8-white')
-            fig = plt.figure(figsize=(16, 10))
-            gs = fig.add_gridspec(2, 2)
-            
-            # Trace principale avec points rouges
-            ax1 = fig.add_subplot(gs[0, 0])
-            abf.setSweep(sw_idx)
-            ax1.plot(abf.sweepX, abf.sweepY, color='black', lw=1)
-            
-            trace_win_visu = abf.sweepY[idx_start_search:idx_end_search]
-            distance_samples = int(sr * (refractory_ms / 1000.0))
-            peaks_visu, _ = find_peaks(trace_win_visu, height=spike_threshold, prominence=prominence_th, distance=max(1, distance_samples))
-            
-            if len(peaks_visu) > 0:
-                peak_times = abf.sweepX[idx_start_search + peaks_visu]
-                peak_values = abf.sweepY[idx_start_search + peaks_visu]
-                ax1.plot(peak_times, peak_values, 'ro', markersize=5, label=f"Spikes détectés ({len(peaks_visu)})")
-
-            if not np.isnan(v_thresh_list[sw_idx]):
-                ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.3, label="Threshold dV/dt (1er PA)")
+            # --- AJOUT AHP : On trace une croix bleue à l'endroit exact de l'AHP ---
+            idx_ahp_plot = ap_ahp_indices[sw_idx]
+            if not pd.isna(idx_ahp_plot):
+                idx_ahp_plot = int(idx_ahp_plot)
+                ax1.plot(abf.sweepX[idx_ahp_plot], abf.sweepY[idx_ahp_plot], 'bx', markersize=10, markeredgewidth=2, label="AHP Min")
                 
             ax1.legend(loc='upper right')
-            ax1.set_title(f"Sweep {sw_idx}", fontweight='bold')
-            ax1.set_ylabel("mV")
-
-            # Overlay
-            ax2 = fig.add_subplot(gs[0, 1])
-            cmap = plt.colormaps.get_cmap('viridis')
-            for i, s in enumerate(stk_indices):
-                abf.setSweep(s)
-                ax2.plot(abf.sweepX, abf.sweepY, color=cmap(i/max(1, len(stk_indices))), alpha=0.8, lw=0.8)
-            ax2.set_title(f"Overlay ({len(stk_indices)} traces)", fontweight='bold')
-            ax2.set_ylabel("mV")
-
-            # I-V Curve
-            ax3 = fig.add_subplot(gs[1, 0])
-            ax3.plot(courants, v_stat, 'o-', color='tab:blue', label="Steady-state")
-            ax3.plot(courants, v_peak, 'x--', color='tab:blue', alpha=0.5, label="Peak (Sag)")
-            ax3.plot(courants[sw_idx], v_stat[sw_idx], 'ro', markersize=9, zorder=5) 
-            ax3.set_title("I-V Curve", fontweight='bold')
-            ax3.set_xlabel(f"Current ({unit_i})"); ax3.set_ylabel("mV"); ax3.legend()
-
-            # f-I Curve
-            ax4 = fig.add_subplot(gs[1, 1])
-            ax4.plot(courants, n_spikes, 's-', color='tab:orange')
-            ax4.plot(courants[sw_idx], n_spikes[sw_idx], 'ro', markersize=9, zorder=5) 
-            ax4.set_title("f-I Curve", fontweight='bold')
-            ax4.set_xlabel(f"Current ({unit_i})"); ax4.set_ylabel("Spike count")
             
-            plt.tight_layout()
-            st.pyplot(fig)
+        ax1.set_title(f"Sweep {sw_idx}", fontweight='bold')
+        ax1.set_ylabel("mV")
 
-        with tab2:
+        ax2 = fig.add_subplot(gs[0, 1])
+        cmap = plt.colormaps.get_cmap('viridis')
+        for i, s in enumerate(stk_indices):
+            abf.setSweep(s)
+            ax2.plot(abf.sweepX, abf.sweepY, color=cmap(i/max(1, len(stk_indices))), alpha=0.8, lw=0.8)
+        ax2.set_title(f"Overlay ({len(stk_indices)} traces)", fontweight='bold')
+        ax2.set_ylabel("mV")
+
+        ax3 = fig.add_subplot(gs[1, 0])
+        ax3.plot(courants, v_stat, 'o-', color='tab:blue', label="Steady-state")
+        ax3.plot(courants, v_peak, 'x--', color='tab:blue', alpha=0.5, label="Peak (Sag)")
+        ax3.plot(courants[sw_idx], v_stat[sw_idx], 'ro', markersize=9, zorder=5) 
+        ax3.set_title("I-V Curve", fontweight='bold')
+        ax3.set_xlabel(f"Current ({unit_i})"); ax3.set_ylabel("mV"); ax3.legend()
+
+        ax4 = fig.add_subplot(gs[1, 1])
+        ax4.plot(courants, n_spikes, 's-', color='tab:orange')
+        ax4.plot(courants[sw_idx], n_spikes[sw_idx], 'ro', markersize=9, zorder=5) 
+        ax4.set_title("f-I Curve", fontweight='bold')
+        ax4.set_xlabel(f"Current ({unit_i})"); ax4.set_ylabel("Spike count")
+        
+        st.pyplot(fig)
+
+        # --- EXPORT ---
+        st.divider()
+        st.subheader(T["export"][lang])
+        col_exp1, col_exp2 = st.columns(2)
+        
+        df_global = pd.DataFrame({
+            "File": [uploaded_file.name], "Vrest_mV": [v_rest_final], "Rin_MOhms": [rin],
+            "Cm_pF": [cm], "Tau_ms": [tau], "Rheobase_I": [rheo_i], "Rheobase_mV": [rheo_v]
+        })
+        col_exp1.download_button(T["exp_global"][lang], df_global.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Global.csv", use_container_width=True)
+
+        df_sweeps = pd.DataFrame({
+            "Sweep": abf.sweepList, "I_inj": courants, "Nb_AP_par_step": n_spikes,
+            "V_steady": v_stat, "V_threshold": v_thresh_list, "AP_Amp": ap_amps, 
+            "AP_Width_ms": ap_widths, "AP_Rise_ms": ap_rise, "AP_Decay_ms": ap_decay, "AP_AHP": ap_ahp
+        })
+        col_exp2.download_button(T["exp_sweeps"][lang], df_sweeps.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Sweeps.csv", use_container_width=True)
+
+        # --- README, FORMALISME & CITATION ---
+        st.divider()
+        with st.expander(T["readme_title"][lang]):
             if lang == "Français":
-                # Le "r" avant les triples guillemets empêche Python de lire "\t" comme une tabulation !
-                st.markdown(r"""
-                ## 🔬 Formalisme Mathématique & Rigueur Biophysique
-                
-                ### 1. Extraction des Paramètres Passifs
-                * **Résistance d'Entrée ($R_{in}$)** : Calculée par régression linéaire sur les 4 premiers échelons hyperpolarisants ($I < 0$).
-                * **Capacitance ($C_m$)** : Dérivée de la constante de temps membranaire ($\tau_m$). $\tau_m$ est mesuré par le temps nécessaire pour atteindre 63.2% de la réponse stationnaire.
-                
-                ### 2. Algorithme de Détection des Événements (Spikes)
-                * **Fenêtrage Dynamique** : La détection commence après un délai ($t_{artefact}$) pour ignorer le transitoire capacitif et se termine avec un débordement de 50ms après le pulse.
-                * **Critère de Proéminence** : Chaque pic doit s'élever d'une hauteur relative minimale par rapport à sa base.
-                
-                ### 3. Filtre Heuristique : Bloc de Dépolarisation
-                Sous forte stimulation, le neurone peut entrer en état d'inactivation sodique totale. 
-                Si $V_{threshold} < -60$ mV ou si le potentiel ne repolarise pas (Decay = NaN), le sweep est classé en "Bloc de dépolarisation" et le compteur est forcé à zéro.
+                st.markdown("""
+                ### 📄 README (Mode d'emploi)
+                Cet outil est conçu pour le traitement par lots et l'extraction biophysique de traces *Current-Clamp* (.abf).
+                1. Chargez votre fichier via le panneau latéral.
+                2. Réglez le **Seuil dV/dt (15 mV/ms par défaut)**. C'est l'étalon-or pour détecter l'ouverture massive des canaux sodiques.
+                3. Inspectez visuellement la qualité du *seal* et les potentielles instabilités de Vrest.
+                4. Exportez le profil biophysique global et les données métriques par échelons pour vos analyses statistiques (GraphPad, R, Python).
+
+                ### 🧠 Formalisme & Limites
+                * **Capacitance ($C_m = \\tau_m / R_{in}$) :** Calculée au point de charge de 63.2%. *Limite (Space-Clamp)* : Dans des neurones à arborescence dendritique riche (ex: neurones pyramidaux CA1/PFC, ou modèles de pathologies comme l'X Fragile), $C_m$ peut être sous-estimée.
+                * **Decay Time (NaN) :** Si la métrique `Decay` indique `NaN`, c'est que le neurone n'a pas repolarisé sous les 10% de son amplitude dans une fenêtre de 100 ms (bloc de dépolarisation, inactivation $K^+$). C'est un paramètre biologique pertinent.
+
+                ### 🎓 Citation
+                Si vous utilisez ce code ou ce pipeline pour une publication scientifique, merci d'inclure le DOI et la citation suivante :
+                > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.* > **DOI:** `10.5281/zenodo.XXXXXXX` *(Placeholder)*
+                > **Github:** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
                 """)
             else:
-                st.markdown(r"""
-                ## 🔬 Mathematical Formalism & Biophysical Rigor
-                
-                ### 1. Passive Properties Extraction
-                * **Input Resistance ($R_{in}$)**: Calculated via linear regression on the first 4 hyperpolarizing steps ($I < 0$).
-                * **Capacitance ($C_m$)**: Derived from the membrane time constant ($\tau_m$). $\tau_m$ is measured as the time required to reach 63.2% of the steady-state response.
-                
-                ### 2. Event Detection Algorithm (Spikes)
-                * **Dynamic Windowing**: Detection starts after a delay ($t_{artifact}$) to ignore capacitive transients and ends with a 50ms padding after the pulse.
-                * **Prominence Criterion**: Each peak must rise by a minimum relative height from its base.
-                
-                ### 3. Heuristic Filter: Depolarization Block
-                Under high stimulation, the neuron may reach a state of total sodium inactivation. 
-                If $V_{threshold} < -60$ mV or if the potential does not repolarize (Decay = NaN), the sweep is classified as "Depolarization Block" and the counter is forced to zero.
+                st.markdown("""
+                ### 📄 README (Instructions)
+                This tool is designed for batch processing and biophysical extraction of *Current-Clamp* traces (.abf).
+                1. Upload your file via the sidebar.
+                2. Adjust the **dV/dt Threshold (default 15 mV/ms)**. This is the gold standard for detecting massive sodium channel opening.
+                3. Visually inspect the seal quality and any potential Vrest instabilities.
+                4. Export the global biophysical profile and sweep-by-sweep metric data for statistical analysis.
+
+                ### 🧠 Formalism & Limitations
+                * **Capacitance ($C_m = \\tau_m / R_{in}$) :** Calculated at the 63.2% charge point. *Limitation (Space-Clamp)*: In neurons with complex dendritic arborizations (e.g., CA1/PFC pyramidal neurons, or disease models like Fragile X), $C_m$ may be underestimated.
+                * **Decay Time (NaN) :** If the `Decay` metric shows `NaN`, it means the neuron did not repolarize below 10% of its amplitude within a 100 ms window (depolarization block, $K^+$ inactivation). This is a biologically relevant parameter.
+
+                ### 🎓 Citation
+                If you use this code or pipeline for a scientific publication, please include the DOI and following citation:
+                > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.* > **DOI:** `10.5281/zenodo.XXXXXXX` *(Placeholder)*
+                > **Github:** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
                 """)
-
-        with tab3:
-            st.subheader("📥 Exporter les Matrices de Données")
-            col_exp1, col_exp2 = st.columns(2)
-            
-            df_global = pd.DataFrame({
-                "File": [uploaded_file.name], "Vrest_mV": [v_rest_final], "Rin_MOhms": [rin],
-                "Cm_pF": [cm], "Tau_ms": [tau], "Rheobase_I": [rheo_i], "Rheobase_mV": [rheo_v]
-            })
-            col_exp1.download_button("💾 Profil Global (CSV)", df_global.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Global.csv", use_container_width=True)
-
-            df_sweeps = pd.DataFrame({
-                "Sweep": abf.sweepList, "I_inj": courants, "Nb_Spikes": n_spikes,
-                "V_steady": v_stat, "V_threshold": v_thresh_list, "AP_Amp": ap_amps, 
-                "AP_Width_ms": ap_widths, "AP_Rise_ms": ap_rise, "AP_Decay_ms": ap_decay, "AP_AHP": ap_ahp
-            })
-            col_exp2.download_button("💾 Données par Sweep (CSV)", df_sweeps.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Sweeps.csv", use_container_width=True)
 
     finally:
         if os.path.exists(tmp_filepath): os.remove(tmp_filepath)
