@@ -15,7 +15,6 @@ st.set_page_config(page_title="Manzoni Lab - Excitability Pipeline", layout="wid
 st.sidebar.header("🌍 Language / Langue")
 lang = st.sidebar.radio("Select Interface Language:", ["Français", "English"])
 
-# Dictionnaire de traduction simplifié
 T = {
     "title": {"Français": "Pipeline Expert : Excitabilité & Morphométrie", "English": "Expert Pipeline: Excitability & Morphometry"},
     "subtitle": {"Français": "Analyse de la Plasticité Synaptique | Standard de Publication", "English": "Synaptic Plasticity Analysis | Publication Standard"},
@@ -40,10 +39,8 @@ T = {
 # --- EN-TÊTE INSTITUTIONNEL ---
 col_l, col_r = st.columns([2, 5]) 
 with col_l:
-    try: 
-        st.image("logo_chavis_final.png", width=360) 
-    except: 
-        st.info("Manzoni Lab - Neurosciences") 
+    try: st.image("logo_chavis_final.png", width=360) 
+    except: st.info("Manzoni Lab") 
 with col_r:
     st.markdown(f"# {T['title'][lang]}")
     st.markdown(f"### {T['subtitle'][lang]}")
@@ -65,11 +62,7 @@ if uploaded_file is not None:
 
     try:
         abf = pyabf.ABF(tmp_filepath)
-        
-        unit_i = abf.sweepUnitsC  
-        unit_v = abf.sweepUnitsY
-        st.sidebar.success(f"Units : {unit_i} / {unit_v}")
-        
+        unit_i, unit_v = abf.sweepUnitsC, abf.sweepUnitsY
         sr = abf.dataRate
         dt_ms = (1.0 / sr) * 1000.0  
         idx_start, idx_end = int(sr * 0.1), int(sr * 0.6) 
@@ -77,8 +70,8 @@ if uploaded_file is not None:
         courants, v_stat, v_peak, v_rest_list, n_spikes = [], [], [], [], []
         v_thresh_list, ap_amps, ap_widths, ap_rise, ap_decay, ap_ahp = [], [], [], [], [], []
         
-        # --- AJOUT AHP : Nouvelle liste pour stocker l'index de l'AHP ---
-        ap_ahp_indices = [] 
+        # Liste pour stocker TOUTES les coordonnées des AHPs pour chaque sweep
+        sweep_all_ahps_indices = [] 
         
         for sweep in abf.sweepList:
             abf.setSweep(sweep)
@@ -91,13 +84,14 @@ if uploaded_file is not None:
             peaks, _ = find_peaks(trace_win, height=spike_threshold)
             num_spikes = len(peaks)
             
-            vt, amp, width, rise, decay, ahp = [np.nan]*6
-            ahp_idx_val = np.nan # --- AJOUT AHP : Initialisation à NaN ---
+            vt, amp, width, rise, decay, ahp_1st = [np.nan]*6
+            ahp_indices_for_current_sweep = []
             
             if num_spikes > 0:
-                pk_idx = peaks[0]
-                s_start = max(0, pk_idx - int(sr * 0.015))
-                seg = trace_win[s_start:pk_idx]
+                # 1. Extraction Morphologique du PREMIER Spike (pour l'export)
+                pk_idx_1st = peaks[0]
+                s_start = max(0, pk_idx_1st - int(sr * 0.015))
+                seg = trace_win[s_start:pk_idx_1st]
                 
                 if len(seg) > 1:
                     smoothed = gaussian_filter1d(seg, sigma=1)
@@ -108,40 +102,50 @@ if uploaded_file is not None:
                         idx_t_seg = cross[0]
                         vt = seg[idx_t_seg]
                         idx_t_glob = s_start + idx_t_seg
-                        amp = trace_win[pk_idx] - vt
+                        amp = trace_win[pk_idx_1st] - vt
                         
                         if amp > 0:
                             v50 = vt + 0.5*amp; v10 = vt + 0.1*amp; v90 = vt + 0.9*amp
-                            up = trace_win[idx_t_glob:pk_idx]
+                            up = trace_win[idx_t_glob:pk_idx_1st]
                             
-                            # --- CORRECTION DECAY (Tolérance étendue à 100ms) ---
-                            if num_spikes > 1:
-                                dn_end = peaks[1] 
-                            else:
-                                dn_end = min(len(trace_win), pk_idx + int(sr * 0.1)) # 100 ms
-                                
-                            dn = trace_win[pk_idx:dn_end]
+                            dn_end_1st = peaks[1] if num_spikes > 1 else min(len(trace_win), pk_idx_1st + int(sr * 0.1))
+                            dn_1st = trace_win[pk_idx_1st:dn_end_1st]
                             
                             r10 = np.where(up >= v10)[0]; r90 = np.where(up >= v90)[0]
                             if len(r10)>0 and len(r90)>0: rise = (r90[0]-r10[0])*dt_ms
                             
-                            d90 = np.where(dn <= v90)[0]; d10 = np.where(dn <= v10)[0]
+                            d90 = np.where(dn_1st <= v90)[0]; d10 = np.where(dn_1st <= v10)[0]
                             if len(d90)>0 and len(d10)>0: decay = (d10[0]-d90[0])*dt_ms
                             
-                            wup = np.where(up >= v50)[0]; wdn = np.where(dn <= v50)[0]
-                            if len(wup)>0 and len(wdn)>0: width = ((pk_idx+wdn[0])-(idx_t_glob+wup[0]))*dt_ms
-                            
-                            # --- AJOUT AHP : Extraction de l'index exact du minimum ---
-                            if len(dn) > 0:
-                                ahp_min_local = np.argmin(dn)
-                                ahp = dn[ahp_min_local]
-                                # Calcul de l'index global dans le tableau abf.sweepY complet
-                                ahp_idx_val = idx_start + pk_idx + ahp_min_local
+                            wup = np.where(up >= v50)[0]; wdn = np.where(dn_1st <= v50)[0]
+                            if len(wup)>0 and len(wdn)>0: width = ((pk_idx_1st+wdn[0])-(idx_t_glob+wup[0]))*dt_ms
+
+                # 2. Détection RIGUREUSE des AHPs pour TOUS les spikes du sweep (Visuel)
+                for i, pk_idx in enumerate(peaks):
+                    # Fenêtre stricte : 20 ms maximum après le sommet du spike
+                    max_search_window = pk_idx + int(sr * 0.02)
+                    
+                    # On s'arrête au prochain spike si la fréquence est très élevée
+                    if i < num_spikes - 1:
+                        ahp_end = min(max_search_window, peaks[i+1])
+                    else:
+                        ahp_end = min(max_search_window, len(trace_win))
+                    
+                    dn_segment = trace_win[pk_idx:ahp_end]
+                    
+                    if len(dn_segment) > 0:
+                        local_min_idx = np.argmin(dn_segment)
+                        global_ahp_idx = idx_start + pk_idx + local_min_idx
+                        ahp_indices_for_current_sweep.append(global_ahp_idx)
+                        
+                        # Si c'est le premier spike, on sauvegarde la valeur de l'AHP pour l'export CSV
+                        if i == 0:
+                            ahp_1st = dn_segment[local_min_idx]
 
             courants.append(i_cmd); v_stat.append(v_s); v_peak.append(v_p)
             v_rest_list.append(v_r); n_spikes.append(num_spikes); v_thresh_list.append(vt)
-            ap_amps.append(amp); ap_widths.append(width); ap_rise.append(rise); ap_decay.append(decay); ap_ahp.append(ahp)
-            ap_ahp_indices.append(ahp_idx_val) # --- AJOUT AHP : Sauvegarde de l'index ---
+            ap_amps.append(amp); ap_widths.append(width); ap_rise.append(rise); ap_decay.append(decay); ap_ahp.append(ahp_1st)
+            sweep_all_ahps_indices.append(ahp_indices_for_current_sweep)
 
         # --- CALCULS GLOBAUX ---
         v_rest_final = np.mean(v_rest_list)
@@ -190,7 +194,9 @@ if uploaded_file is not None:
             c_ap2.metric("Half-Width", f"{ap_widths[sw_idx]:.2f} ms")
             c_ap3.metric("Rise (10-90%)", f"{ap_rise[sw_idx]:.2f} ms")
             c_ap4.metric("Decay (90-10%)", f"{ap_decay[sw_idx]:.2f} ms")
-            c_ap5.metric("AHP (Min)", f"{ap_ahp[sw_idx]:.1f} mV")
+            # L'AHP affichée ici est calculée par rapport à V_threshold
+            ahp_relative = v_thresh_list[sw_idx] - ap_ahp[sw_idx] if not np.isnan(v_thresh_list[sw_idx]) else np.nan
+            c_ap5.metric("AHP Amplitude", f"{ahp_relative:.1f} mV" if not np.isnan(ahp_relative) else "N/A")
         else:
             st.info(T["no_ap"][lang])
             
@@ -207,11 +213,10 @@ if uploaded_file is not None:
         if not np.isnan(v_thresh_list[sw_idx]):
             ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.6, label="Threshold dV/dt")
             
-            # --- AJOUT AHP : On trace une croix bleue à l'endroit exact de l'AHP ---
-            idx_ahp_plot = ap_ahp_indices[sw_idx]
-            if not pd.isna(idx_ahp_plot):
-                idx_ahp_plot = int(idx_ahp_plot)
-                ax1.plot(abf.sweepX[idx_ahp_plot], abf.sweepY[idx_ahp_plot], 'bx', markersize=10, markeredgewidth=2, label="AHP Min")
+            # Affichage correct de TOUTES les AHPs sur le sweep actif
+            indices_to_plot = sweep_all_ahps_indices[sw_idx]
+            if indices_to_plot:
+                ax1.plot(abf.sweepX[indices_to_plot], abf.sweepY[indices_to_plot], 'bx', markersize=8, markeredgewidth=2, label="AHP Min (tous les PA)")
                 
             ax1.legend(loc='upper right')
             
@@ -252,52 +257,15 @@ if uploaded_file is not None:
         })
         col_exp1.download_button(T["exp_global"][lang], df_global.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Global.csv", use_container_width=True)
 
+        # On calcule l'AHP relative au seuil pour le CSV
+        ap_ahp_relative = [v_t - a if not np.isnan(v_t) and not np.isnan(a) else np.nan for v_t, a in zip(v_thresh_list, ap_ahp)]
+
         df_sweeps = pd.DataFrame({
-            "Sweep": abf.sweepList, "I_inj": courants, "Nb_AP_par_step": n_spikes,
+            "Sweep": abf.sweepList, "I_inj": courants, "Nb_Spikes": n_spikes,
             "V_steady": v_stat, "V_threshold": v_thresh_list, "AP_Amp": ap_amps, 
-            "AP_Width_ms": ap_widths, "AP_Rise_ms": ap_rise, "AP_Decay_ms": ap_decay, "AP_AHP": ap_ahp
+            "AP_Width_ms": ap_widths, "AP_Rise_ms": ap_rise, "AP_Decay_ms": ap_decay, "AP_AHP": ap_ahp_relative
         })
         col_exp2.download_button(T["exp_sweeps"][lang], df_sweeps.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Sweeps.csv", use_container_width=True)
-
-        # --- README, FORMALISME & CITATION ---
-        st.divider()
-        with st.expander(T["readme_title"][lang]):
-            if lang == "Français":
-                st.markdown("""
-                ### 📄 README (Mode d'emploi)
-                Cet outil est conçu pour le traitement par lots et l'extraction biophysique de traces *Current-Clamp* (.abf).
-                1. Chargez votre fichier via le panneau latéral.
-                2. Réglez le **Seuil dV/dt (15 mV/ms par défaut)**. C'est l'étalon-or pour détecter l'ouverture massive des canaux sodiques.
-                3. Inspectez visuellement la qualité du *seal* et les potentielles instabilités de Vrest.
-                4. Exportez le profil biophysique global et les données métriques par échelons pour vos analyses statistiques (GraphPad, R, Python).
-
-                ### 🧠 Formalisme & Limites
-                * **Capacitance ($C_m = \\tau_m / R_{in}$) :** Calculée au point de charge de 63.2%. *Limite (Space-Clamp)* : Dans des neurones à arborescence dendritique riche (ex: neurones pyramidaux CA1/PFC, ou modèles de pathologies comme l'X Fragile), $C_m$ peut être sous-estimée.
-                * **Decay Time (NaN) :** Si la métrique `Decay` indique `NaN`, c'est que le neurone n'a pas repolarisé sous les 10% de son amplitude dans une fenêtre de 100 ms (bloc de dépolarisation, inactivation $K^+$). C'est un paramètre biologique pertinent.
-
-                ### 🎓 Citation
-                Si vous utilisez ce code ou ce pipeline pour une publication scientifique, merci d'inclure le DOI et la citation suivante :
-                > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.* > **DOI:** `10.5281/zenodo.XXXXXXX` *(Placeholder)*
-                > **Github:** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
-                """)
-            else:
-                st.markdown("""
-                ### 📄 README (Instructions)
-                This tool is designed for batch processing and biophysical extraction of *Current-Clamp* traces (.abf).
-                1. Upload your file via the sidebar.
-                2. Adjust the **dV/dt Threshold (default 15 mV/ms)**. This is the gold standard for detecting massive sodium channel opening.
-                3. Visually inspect the seal quality and any potential Vrest instabilities.
-                4. Export the global biophysical profile and sweep-by-sweep metric data for statistical analysis.
-
-                ### 🧠 Formalism & Limitations
-                * **Capacitance ($C_m = \\tau_m / R_{in}$) :** Calculated at the 63.2% charge point. *Limitation (Space-Clamp)*: In neurons with complex dendritic arborizations (e.g., CA1/PFC pyramidal neurons, or disease models like Fragile X), $C_m$ may be underestimated.
-                * **Decay Time (NaN) :** If the `Decay` metric shows `NaN`, it means the neuron did not repolarize below 10% of its amplitude within a 100 ms window (depolarization block, $K^+$ inactivation). This is a biologically relevant parameter.
-
-                ### 🎓 Citation
-                If you use this code or pipeline for a scientific publication, please include the DOI and following citation:
-                > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.* > **DOI:** `10.5281/zenodo.XXXXXXX` *(Placeholder)*
-                > **Github:** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
-                """)
 
     finally:
         if os.path.exists(tmp_filepath): os.remove(tmp_filepath)
