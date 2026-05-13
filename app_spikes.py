@@ -69,8 +69,6 @@ if uploaded_file is not None:
         
         courants, v_stat, v_peak, v_rest_list, n_spikes = [], [], [], [], []
         v_thresh_list, ap_amps, ap_widths, ap_rise, ap_decay, ap_ahp = [], [], [], [], [], []
-        
-        # Liste pour stocker TOUTES les coordonnées des AHPs pour chaque sweep
         sweep_all_ahps_indices = [] 
         
         for sweep in abf.sweepList:
@@ -81,14 +79,16 @@ if uploaded_file is not None:
             v_p = np.min(abf.sweepY[idx_start:idx_end]) if i_cmd < 0 else np.max(abf.sweepY[idx_start:idx_end])
             
             trace_win = abf.sweepY[idx_start:idx_end]
-            peaks, _ = find_peaks(trace_win, height=spike_threshold)
+            
+            # --- Période réfractaire (3ms) pour contrer le bruit de crête ---
+            min_dist_samples = int(sr * 0.003) 
+            peaks, _ = find_peaks(trace_win, height=spike_threshold, distance=min_dist_samples)
             num_spikes = len(peaks)
             
             vt, amp, width, rise, decay, ahp_1st = [np.nan]*6
             ahp_indices_for_current_sweep = []
             
             if num_spikes > 0:
-                # 1. Extraction Morphologique du PREMIER Spike (pour l'export)
                 pk_idx_1st = peaks[0]
                 s_start = max(0, pk_idx_1st - int(sr * 0.015))
                 seg = trace_win[s_start:pk_idx_1st]
@@ -120,12 +120,10 @@ if uploaded_file is not None:
                             wup = np.where(up >= v50)[0]; wdn = np.where(dn_1st <= v50)[0]
                             if len(wup)>0 and len(wdn)>0: width = ((pk_idx_1st+wdn[0])-(idx_t_glob+wup[0]))*dt_ms
 
-                # 2. Détection RIGUREUSE des AHPs pour TOUS les spikes du sweep (Visuel)
+                # --- Détection des AHPs pour TOUS les spikes ---
                 for i, pk_idx in enumerate(peaks):
-                    # Fenêtre stricte : 20 ms maximum après le sommet du spike
-                    max_search_window = pk_idx + int(sr * 0.02)
+                    max_search_window = pk_idx + int(sr * 0.05) # 50 ms max
                     
-                    # On s'arrête au prochain spike si la fréquence est très élevée
                     if i < num_spikes - 1:
                         ahp_end = min(max_search_window, peaks[i+1])
                     else:
@@ -138,7 +136,6 @@ if uploaded_file is not None:
                         global_ahp_idx = idx_start + pk_idx + local_min_idx
                         ahp_indices_for_current_sweep.append(global_ahp_idx)
                         
-                        # Si c'est le premier spike, on sauvegarde la valeur de l'AHP pour l'export CSV
                         if i == 0:
                             ahp_1st = dn_segment[local_min_idx]
 
@@ -182,9 +179,25 @@ if uploaded_file is not None:
         
         col_v1, col_v2 = st.columns(2)
         with col_v1:
-            sw_idx = st.slider(T["select_sweep"][lang], 0, abf.sweepCount-1, int(rheo_idx_global) if rheo_idx_global else 0)
+            # CORRECTION : Protège le curseur si un seul sweep
+            if abf.sweepCount > 1:
+                default_sw = int(rheo_idx_global) if rheo_idx_global is not None else 0
+                default_sw = min(max(default_sw, 0), abf.sweepCount - 1) 
+                sw_idx = st.slider(T["select_sweep"][lang], 0, abf.sweepCount-1, default_sw)
+            else:
+                sw_idx = 0
+                st.info("Fichier à Sweep unique (Gap-free).")
+                
         with col_v2:
-            stk_indices = st.multiselect(T["select_overlay"][lang], list(range(abf.sweepCount)), default=[0, abf.sweepCount//2, abf.sweepCount-1])
+            # CORRECTION : Protège le multiselect si moins de 3 sweeps
+            if abf.sweepCount == 1:
+                default_stk = [0]
+            elif abf.sweepCount == 2:
+                default_stk = [0, 1]
+            else:
+                default_stk = [0, abf.sweepCount//2, abf.sweepCount-1]
+                
+            stk_indices = st.multiselect(T["select_overlay"][lang], list(range(abf.sweepCount)), default=default_stk)
         
         st.markdown(f"**{T['morph_title'][lang]} {sw_idx} ({courants[sw_idx]:.1f} {unit_i})**")
         
@@ -194,7 +207,6 @@ if uploaded_file is not None:
             c_ap2.metric("Half-Width", f"{ap_widths[sw_idx]:.2f} ms")
             c_ap3.metric("Rise (10-90%)", f"{ap_rise[sw_idx]:.2f} ms")
             c_ap4.metric("Decay (90-10%)", f"{ap_decay[sw_idx]:.2f} ms")
-            # L'AHP affichée ici est calculée par rapport à V_threshold
             ahp_relative = v_thresh_list[sw_idx] - ap_ahp[sw_idx] if not np.isnan(v_thresh_list[sw_idx]) else np.nan
             c_ap5.metric("AHP Amplitude", f"{ahp_relative:.1f} mV" if not np.isnan(ahp_relative) else "N/A")
         else:
@@ -213,10 +225,9 @@ if uploaded_file is not None:
         if not np.isnan(v_thresh_list[sw_idx]):
             ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.6, label="Threshold dV/dt")
             
-            # Affichage correct de TOUTES les AHPs sur le sweep actif
             indices_to_plot = sweep_all_ahps_indices[sw_idx]
             if indices_to_plot:
-                ax1.plot(abf.sweepX[indices_to_plot], abf.sweepY[indices_to_plot], 'bx', markersize=8, markeredgewidth=2, label="AHP Min (tous les PA)")
+                ax1.plot(abf.sweepX[indices_to_plot], abf.sweepY[indices_to_plot], 'bx', markersize=8, markeredgewidth=2, label="AHP Min")
                 
             ax1.legend(loc='upper right')
             
@@ -257,7 +268,6 @@ if uploaded_file is not None:
         })
         col_exp1.download_button(T["exp_global"][lang], df_global.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Global.csv", use_container_width=True)
 
-        # On calcule l'AHP relative au seuil pour le CSV
         ap_ahp_relative = [v_t - a if not np.isnan(v_t) and not np.isnan(a) else np.nan for v_t, a in zip(v_thresh_list, ap_ahp)]
 
         df_sweeps = pd.DataFrame({
