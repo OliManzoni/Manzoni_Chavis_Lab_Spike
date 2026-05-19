@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
+st.error("TEST DE MISE À JOUR : SI VOUS VOYEZ CECI, LE NOUVEAU CODE EST LU.")
+
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Manzoni Lab - Averaged Curves", layout="wide")
 
