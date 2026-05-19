@@ -56,6 +56,7 @@ error_choice = st.sidebar.radio(
     T["err_type"][lang], 
     [T["err_sem"][lang], T["err_ci"][lang]]
 )
+# Définition du paramètre Seaborn en fonction du choix
 err_bar_style = 'se' if error_choice == T["err_sem"][lang] else ('ci', 95)
 
 # --- CORPS DE L'APPLICATION ---
@@ -67,10 +68,16 @@ else:
     
     for f in uploaded_files:
         if "Sweeps" in f.name or "sweeps" in f.name.lower():
-            df = pd.read_csv(f)
-            df['Cell_ID'] = f.name.replace("_Sweeps.csv", "").replace(".csv", "")
-            df_list.append(df)
-            cell_count += 1
+            # CORRECTION CRITIQUE : Réinitialise le pointeur du fichier pour les re-runs de Streamlit
+            f.seek(0) 
+            
+            try:
+                df = pd.read_csv(f)
+                df['Cell_ID'] = f.name.replace("_Sweeps.csv", "").replace(".csv", "")
+                df_list.append(df)
+                cell_count += 1
+            except Exception as e:
+                st.warning(f"Impossible de lire le fichier {f.name} : {e}")
             
     if not df_list:
         st.error("Aucun fichier valide trouvé. Assurez-vous qu'ils contiennent 'Sweeps' dans leur nom." if lang == "Français" else "No valid files found. Ensure they contain 'Sweeps' in the filename.")
@@ -78,27 +85,29 @@ else:
         master_df = pd.concat(df_list, ignore_index=True)
         
         required_cols = ['I_inj', 'Nb_Spikes', 'V_steady']
+        
+        # Vérification des colonnes
         if not all(col in master_df.columns for col in required_cols):
-            st.error(f"Format incorrect. Les colonnes requises sont : {required_cols}")
+            st.error(f"Format incorrect. Les colonnes requises sont : {required_cols}. Colonnes trouvées : {list(master_df.columns)}")
         else:
-            # --- ZONE DE SÉCURISATION ET DE TRI ---
-            # Arrondir I_inj à 4 décimales élimine les micro-bruits de codage binaire (ex: -0.000001 devient 0.0)
-            master_df['I_inj'] = master_df['I_inj'].round(4)
-            # Tri indispensable pour éviter les zigzags et retours en arrière sur l'axe graphique
-            master_df = master_df.sort_values(by=['I_inj']).reset_index(drop=True)
+            # CORRECTION : S'assure que les données sont numériques (évite les bugs liés aux formats CSV)
+            for col in required_cols:
+                master_df[col] = pd.to_numeric(master_df[col], errors='coerce')
             
-            st.success(f"✅ {cell_count} " + ("cellules fusionnées et alignées avec succès." if lang == "Français" else "cells successfully merged and aligned."))
+            st.success(f"✅ {cell_count} " + ("cellules fusionnées avec succès." if lang == "Français" else "cells successfully merged."))
             
             # --- ONGLETS ---
             tab1, tab2, tab3 = st.tabs([T["tab_graphs"][lang], T["tab_data"][lang], T["tab_howto"][lang]])
 
             # --- ONGLET 1 : GRAPHIQUES ---
             with tab1:
-                plt.style.use('seaborn-v0_8-white')
+                # CORRECTION : Style Seaborn robuste indépendant de la version Matplotlib
+                sns.set_style("white")
+                
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
                 
-                # Seuil à -0.001 pour être sûr de capter le step à 0.0 nA malgré les approximations
-                df_depol = master_df[master_df['I_inj'] >= -0.001]
+                # Sous-échantillonnage pour la courbe f-I
+                df_depol = master_df[master_df['I_inj'] >= 0]
                 
                 # Graphe f-I
                 sns.lineplot(
@@ -107,7 +116,7 @@ else:
                     marker='o', color='firebrick', ax=ax1, linewidth=2
                 )
                 ax1.set_title(T["fi_title"][lang], fontweight='bold')
-                ax1.set_xlabel("Injected Current (nA)")
+                ax1.set_xlabel("Injected Current (nA/pA)")
                 ax1.set_ylabel("Spike Count (Hz)")
                 ax1.grid(True, linestyle='--', alpha=0.5)
 
@@ -118,52 +127,5 @@ else:
                     marker='s', color='royalblue', ax=ax2, linewidth=2
                 )
                 ax2.set_title(T["iv_title"][lang], fontweight='bold')
-                ax2.set_xlabel("Injected Current (nA)")
-                ax2.set_ylabel("Steady-State Voltage (mV)")
-                ax2.grid(True, linestyle='--', alpha=0.5)
-                
-                sns.despine()
-                st.pyplot(fig)
-
-            # --- ONGLET 2 : DONNÉES ET EXPORT ---
-            with tab2:
-                st.markdown("### " + ("Données Consolideés par Échelon de Courant" if lang == "Français" else "Consolidated Data per Current Step"))
-                
-                stats_df = master_df.groupby('I_inj').agg(
-                    N_Cells=('Cell_ID', 'nunique'),
-                    Nb_Spikes_Mean=('Nb_Spikes', 'mean'),
-                    Nb_Spikes_SEM=('Nb_Spikes', 'sem'),
-                    V_steady_Mean=('V_steady', 'mean'),
-                    V_steady_SEM=('V_steady', 'sem')
-                ).reset_index()
-                
-                stats_df['Nb_Spikes_95CI'] = stats_df['Nb_Spikes_SEM'] * 1.96
-                stats_df['V_steady_95CI'] = stats_df['V_steady_SEM'] * 1.96
-                
-                display_df = stats_df.copy()
-                display_cols = ['I_inj', 'N_Cells', 'Nb_Spikes_Mean', 'Nb_Spikes_SEM', 'V_steady_Mean', 'V_steady_SEM']
-                st.dataframe(display_df[display_cols].style.format(precision=4), use_container_width=True)
-                
-                csv_export = stats_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label=T["export_btn"][lang],
-                    data=csv_export,
-                    file_name="Averaged_IV_FI_ManzoniLab.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-
-            # --- ONGLET 3 : HOW-TO ---
-            with tab3:
-                if lang == "Français":
-                    st.markdown("""
-                    ### 🔬 Mode d'Emploi : Courbes Moyennées (Batch Plotting)
-                    Cette application aligne automatiquement les échelons de courant (`I_inj`) arrondis à 4 décimales pour éviter les erreurs d'échantillonnage binaire d'Axon.
-                    Le tri des données sur l'axe X élimine les lignes croisées et assure des tracés publiables.
-                    """)
-                else:
-                    st.markdown("""
-                    ### 🔬 How-To: Averaged Curves (Batch Plotting)
-                    This app automatically aligns current steps (`I_inj`) rounded to 4 decimals to avoid Axon binary sampling approximations.
-                    Sorting data along the X-axis removes overlapping traces and ensures publication-grade plots.
-                    """)
+                ax2.set_xlabel("Injected Current (nA/pA)")
+                ax2.set_ylabel("
