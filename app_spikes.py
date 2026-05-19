@@ -3,161 +3,167 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
-from scipy import stats
-import statsmodels.api as sm
-from statsmodels.formula.api import ols
-from statsmodels.stats.anova import AnovaRM
+import os
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Manzoni Lab - Batch Analysis Expert", layout="wide")
+st.set_page_config(page_title="Manzoni Lab - Averaged Curves", layout="wide")
 
-st.markdown("# 📊 Analyse de Groupe & Statistiques")
-st.markdown("### Consolidation : Propriétés Passives, f-I & I-V")
+# --- GESTION DU BILINGUISME ---
+st.sidebar.header("🌍 Language / Langue")
+lang = st.sidebar.radio("Select Interface Language:", ["Français", "English"])
 
-# --- CHARGEMENT DES DONNÉES ---
-uploaded_files = st.file_uploader("📂 Charger vos fichiers CSV (_Global et _Sweeps)", type="csv", accept_multiple_files=True)
+# --- DICTIONNAIRE DE TRADUCTION ---
+T = {
+    "title": {"Français": "Courbes Moyennées f-I & I-V", "English": "Averaged f-I & I-V Curves"},
+    "subtitle": {"Français": "Analyse de Population & Excitabilité | Manzoni Lab", "English": "Population Analysis & Excitability | Manzoni Lab"},
+    "upload": {"Français": "📂 1. Charger les fichiers", "English": "📂 1. Upload Files"},
+    "upload_help": {"Français": "Sélectionnez plusieurs fichiers terminant par '_Sweeps.csv'", "English": "Select multiple files ending in '_Sweeps.csv'"},
+    "settings": {"Français": "⚙️ 2. Paramètres Visuels", "English": "⚙️ 2. Visual Settings"},
+    "err_type": {"Français": "Type d'Erreur (Ombrage)", "English": "Error Type (Shading)"},
+    "err_sem": {"Français": "SEM (Erreur Standard)", "English": "SEM (Standard Error)"},
+    "err_ci": {"Français": "CI (95% Confiance)", "English": "CI (95% Confidence)"},
+    "tab_graphs": {"Français": "📈 Visualisation des Courbes", "English": "📈 Curve Visualization"},
+    "tab_data": {"Français": "🔢 Données Moyennées (Export)", "English": "🔢 Averaged Data (Export)"},
+    "tab_howto": {"Français": "📚 Mode d'Emploi (How-To)", "English": "📚 User Guide (How-To)"},
+    "export_btn": {"Français": "💾 Exporter les Moyennes (CSV)", "English": "💾 Export Averages (CSV)"},
+    "fi_title": {"Français": "Courbe d'Excitabilité (f-I)", "English": "Excitability Curve (f-I)"},
+    "iv_title": {"Français": "Relation Courant-Voltage (I-V)", "English": "Current-Voltage Relation (I-V)"},
+}
 
-if uploaded_files:
-    global_dfs = []
-    sweeps_dfs = []
-    cell_ids = set()
+# --- EN-TÊTE INSTITUTIONNEL ---
+col_l, col_r = st.columns([2, 5]) 
+with col_l:
+    try: 
+        st.image("logo_chavis_final.png", width=360) 
+    except: 
+        st.info("Manzoni Lab - Neurosciences") 
+with col_r:
+    st.markdown(f"# {T['title'][lang]}")
+    st.markdown(f"### {T['subtitle'][lang]}")
 
-    # 1. Lecture et nettoyage des noms
+st.divider()
+
+# --- BARRE LATÉRALE ---
+st.sidebar.header(T["upload"][lang])
+uploaded_files = st.sidebar.file_uploader(
+    T["upload_help"][lang], 
+    type=["csv"], 
+    accept_multiple_files=True
+)
+
+st.sidebar.header(T["settings"][lang])
+error_choice = st.sidebar.radio(
+    T["err_type"][lang], 
+    [T["err_sem"][lang], T["err_ci"][lang]]
+)
+err_bar_style = 'se' if error_choice == T["err_sem"][lang] else ('ci', 95)
+
+# --- CORPS DE L'APPLICATION ---
+if not uploaded_files:
+    st.info("👈 " + ("Veuillez charger vos fichiers '_Sweeps.csv' dans le menu latéral pour commencer." if lang == "Français" else "Please upload your '_Sweeps.csv' files in the sidebar to begin."))
+else:
+    df_list = []
+    cell_count = 0
+    
     for f in uploaded_files:
-        df = pd.read_csv(f)
-        # Extraction propre du Cell_ID (ex: 2026_04_29_0004X)
-        cell_id = f.name.replace("_Global.csv", "").replace("_Sweeps.csv", "").replace(".abf", "")
-        cell_ids.add(cell_id)
-        
-        df['Cell_ID'] = cell_id
-        
-        if "_Global" in f.name:
-            global_dfs.append(df)
-        elif "_Sweeps" in f.name:
-            sweeps_dfs.append(df)
-
-    if not global_dfs or not sweeps_dfs:
-        st.error("⚠️ Erreur : Chargez à la fois les fichiers '_Global.csv' et '_Sweeps.csv'.")
+        if "Sweeps" in f.name or "sweeps" in f.name.lower():
+            df = pd.read_csv(f)
+            df['Cell_ID'] = f.name.replace("_Sweeps.csv", "").replace(".csv", "")
+            df_list.append(df)
+            cell_count += 1
+            
+    if not df_list:
+        st.error("Aucun fichier valide trouvé. Assurez-vous qu'ils contiennent 'Sweeps' dans leur nom." if lang == "Français" else "No valid files found. Ensure they contain 'Sweeps' in the filename.")
     else:
-        df_g = pd.concat(global_dfs, ignore_index=True)
-        df_s = pd.concat(sweeps_dfs, ignore_index=True)
-
-        # --- 2. MAPPING DES CONDITIONS (NOUVEAUTÉ) ---
-        st.divider()
-        st.subheader("📝 Assignation des Conditions Biologiques")
-        st.info("💡 **Astuce Manzoni Lab :** Vous pouvez copier une colonne entière depuis Excel (WT, KO...) et la coller directement dans la colonne 'Condition' ci-dessous.")
+        master_df = pd.concat(df_list, ignore_index=True)
         
-        # Création du tableau de mapping interactif
-        mapping_df = pd.DataFrame({
-            "Cell_ID": list(cell_ids),
-            "Condition": ["WT"] * len(cell_ids) # WT par défaut
-        })
-        
-        # Éditeur interactif
-        edited_mapping = st.data_editor(mapping_df, use_container_width=False, hide_index=True)
-        
-        # Fusion des conditions choisies avec les données
-        df_g = df_g.merge(edited_mapping, on="Cell_ID")
-        df_s = df_s.merge(edited_mapping, on="Cell_ID")
-
-        st.divider()
-
-        # --- 3. ANALYSE ET GRAPHES ---
-        tab1, tab2, tab3 = st.tabs(["💎 Paramètres Intrinsèques", "📈 Courbes f-I / I-V", "📝 Rapport Statistique"])
-
-        with tab1:
-            st.subheader("Moyennage des Propriétés Biophysiques")
+        required_cols = ['I_inj', 'Nb_Spikes', 'V_steady']
+        if not all(col in master_df.columns for col in required_cols):
+            st.error(f"Format incorrect. Les colonnes requises sont : {required_cols}")
+        else:
+            # --- ZONE DE SÉCURISATION ET DE TRI ---
+            # Arrondir I_inj à 4 décimales élimine les micro-bruits de codage binaire (ex: -0.000001 devient 0.0)
+            master_df['I_inj'] = master_df['I_inj'].round(4)
+            # Tri indispensable pour éviter les zigzags et retours en arrière sur l'axe graphique
+            master_df = master_df.sort_values(by=['I_inj']).reset_index(drop=True)
             
-            # Exclusion des colonnes texte pour la table
-            numeric_cols = [c for c in df_g.columns if c not in ['Cell_ID', 'File', 'Condition']]
+            st.success(f"✅ {cell_count} " + ("cellules fusionnées et alignées avec succès." if lang == "Français" else "cells successfully merged and aligned."))
             
-            # Tableau récapitulatif
-            st.markdown("#### Table : Mean ± SEM par Groupe")
-            if not df_g.empty and len(numeric_cols) > 0:
-                summary_table = df_g.groupby('Condition')[numeric_cols].agg(['mean', 'sem']).stack(level=0)
-                summary_table['Mean ± SEM'] = summary_table.apply(lambda x: f"{x['mean']:.2f} ± {x['sem']:.2f}", axis=1)
-                st.dataframe(summary_table[['Mean ± SEM']].unstack(level=1))
+            # --- ONGLETS ---
+            tab1, tab2, tab3 = st.tabs([T["tab_graphs"][lang], T["tab_data"][lang], T["tab_howto"][lang]])
 
-            st.markdown("#### Visualisation (Boxplot)")
-            col_sel = st.selectbox("Sélectionner un paramètre", numeric_cols)
-            
-            fig, ax = plt.subplots(figsize=(6, 4))
-            sns.boxplot(data=df_g, x='Condition', y=col_sel, palette="vlag", ax=ax)
-            sns.stripplot(data=df_g, x='Condition', y=col_sel, color=".3", size=5, ax=ax)
-            ax.set_title(f"Comparaison : {col_sel}")
-            st.pyplot(fig)
-
-        with tab2:
-            st.subheader("Analyse des Courbes de Population")
-            error_type = st.radio("Affichage des barres d'erreur :", ["SEM (Standard Error)", "CI (95% Confiance)"], horizontal=True)
-            err_bar = 'se' if error_type == "SEM" else 95
-
-            c1, c2 = st.columns(2)
-            
-            with c1:
-                st.markdown("**Fréquence de décharge (f-I)**")
-                fig_fi, ax_fi = plt.subplots()
-                # Exclusion des steps hyperpolarisants pour la courbe f-I (courant < 0)
-                df_s_depol = df_s[df_s['I_inj'] >= 0]
-                sns.lineplot(data=df_s_depol, x='I_inj', y='Nb_Spikes', hue='Condition', 
-                             marker='o', errorbar=err_bar, ax=ax_fi)
-                ax_fi.set_ylabel("Nombre de PA (Hz)")
-                ax_fi.set_xlabel("Courant (nA / pA)")
-                st.pyplot(fig_fi)
-
-            with c2:
-                st.markdown("**Relation Courant-Voltage (I-V)**")
-                fig_iv, ax_iv = plt.subplots()
-                sns.lineplot(data=df_s, x='I_inj', y='V_steady', hue='Condition', 
-                             marker='s', errorbar=err_bar, ax=ax_iv)
-                ax_iv.set_ylabel("Voltage (mV)")
-                ax_iv.set_xlabel("Courant (nA / pA)")
-                st.pyplot(fig_iv)
-
-        with tab3:
-            st.subheader("Tests Statistiques (Format Publication)")
-            
-            groups = df_g['Condition'].unique()
-            if len(groups) == 2:
-                st.markdown(f"#### 1. {col_sel} ({groups[0]} vs {groups[1]})")
-                g1 = df_g[df_g['Condition'] == groups[0]][col_sel].dropna()
-                g2 = df_g[df_g['Condition'] == groups[1]][col_sel].dropna()
+            # --- ONGLET 1 : GRAPHIQUES ---
+            with tab1:
+                plt.style.use('seaborn-v0_8-white')
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
                 
-                # Normalité (Shapiro) pour choisir entre T-test et Mann-Whitney
-                norm1, norm2 = stats.shapiro(g1)[1], stats.shapiro(g2)[1]
-                if norm1 > 0.05 and norm2 > 0.05:
-                    test_stat, p_val = stats.ttest_ind(g1, g2)
-                    st.write(f"Test Paramétrique (Student t-test) : p = **{p_val:.4f}**")
+                # Seuil à -0.001 pour être sûr de capter le step à 0.0 nA malgré les approximations
+                df_depol = master_df[master_df['I_inj'] >= -0.001]
+                
+                # Graphe f-I
+                sns.lineplot(
+                    data=df_depol, x='I_inj', y='Nb_Spikes', 
+                    errorbar=err_bar_style, err_style="band", 
+                    marker='o', color='firebrick', ax=ax1, linewidth=2
+                )
+                ax1.set_title(T["fi_title"][lang], fontweight='bold')
+                ax1.set_xlabel("Injected Current (nA)")
+                ax1.set_ylabel("Spike Count (Hz)")
+                ax1.grid(True, linestyle='--', alpha=0.5)
+
+                # Graphe I-V
+                sns.lineplot(
+                    data=master_df, x='I_inj', y='V_steady', 
+                    errorbar=err_bar_style, err_style="band", 
+                    marker='s', color='royalblue', ax=ax2, linewidth=2
+                )
+                ax2.set_title(T["iv_title"][lang], fontweight='bold')
+                ax2.set_xlabel("Injected Current (nA)")
+                ax2.set_ylabel("Steady-State Voltage (mV)")
+                ax2.grid(True, linestyle='--', alpha=0.5)
+                
+                sns.despine()
+                st.pyplot(fig)
+
+            # --- ONGLET 2 : DONNÉES ET EXPORT ---
+            with tab2:
+                st.markdown("### " + ("Données Consolideés par Échelon de Courant" if lang == "Français" else "Consolidated Data per Current Step"))
+                
+                stats_df = master_df.groupby('I_inj').agg(
+                    N_Cells=('Cell_ID', 'nunique'),
+                    Nb_Spikes_Mean=('Nb_Spikes', 'mean'),
+                    Nb_Spikes_SEM=('Nb_Spikes', 'sem'),
+                    V_steady_Mean=('V_steady', 'mean'),
+                    V_steady_SEM=('V_steady', 'sem')
+                ).reset_index()
+                
+                stats_df['Nb_Spikes_95CI'] = stats_df['Nb_Spikes_SEM'] * 1.96
+                stats_df['V_steady_95CI'] = stats_df['V_steady_SEM'] * 1.96
+                
+                display_df = stats_df.copy()
+                display_cols = ['I_inj', 'N_Cells', 'Nb_Spikes_Mean', 'Nb_Spikes_SEM', 'V_steady_Mean', 'V_steady_SEM']
+                st.dataframe(display_df[display_cols].style.format(precision=4), use_container_width=True)
+                
+                csv_export = stats_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label=T["export_btn"][lang],
+                    data=csv_export,
+                    file_name="Averaged_IV_FI_ManzoniLab.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            # --- ONGLET 3 : HOW-TO ---
+            with tab3:
+                if lang == "Français":
+                    st.markdown("""
+                    ### 🔬 Mode d'Emploi : Courbes Moyennées (Batch Plotting)
+                    Cette application aligne automatiquement les échelons de courant (`I_inj`) arrondis à 4 décimales pour éviter les erreurs d'échantillonnage binaire d'Axon.
+                    Le tri des données sur l'axe X élimine les lignes croisées et assure des tracés publiables.
+                    """)
                 else:
-                    test_stat, p_val = stats.mannwhitneyu(g1, g2)
-                    st.write(f"Test Non-Paramétrique (Mann-Whitney) : p = **{p_val:.4f}**")
-            
-            st.divider()
-
-            st.markdown("#### 2. Courbe f-I (ANOVA à Mesures Répétées)")
-            try:
-                # Filtrer pour n'avoir que les valeurs >= 0 (dépolarisation)
-                df_anova = df_s[df_s['I_inj'] >= 0].copy()
-                
-                # ANOVA RM
-                res_fi = AnovaRM(data=df_anova, depvar='Nb_Spikes', subject='Cell_ID', within=['I_inj'], aggregate_func='mean').fit()
-                st.write("**Effet Intra-Sujet (Courant) :**")
-                st.write(res_fi.summary())
-                
-                # Modèle linéaire pour l'Interaction Groupe * Courant
-                model = ols('Nb_Spikes ~ C(Condition) * I_inj', data=df_anova).fit()
-                st.write("**Interaction (Condition x Courant) :**")
-                st.table(sm.stats.anova_lm(model, typ=2))
-            except Exception as e:
-                st.warning(f"Note sur l'ANOVA RM : Vérifiez que toutes les cellules ont le même protocole d'injection. ({str(e)})")
-
-        # --- EXPORT ---
-        st.divider()
-        st.subheader("📥 Exportation Master")
-        
-        col_ex1, col_ex2 = st.columns(2)
-        csv_master_g = df_g.to_csv(index=False).encode('utf-8')
-        col_ex1.download_button("💾 Master_Global.csv", csv_master_g, "Master_Global_Consolidated.csv", "text/csv", use_container_width=True)
-        
-        csv_master_s = df_s.to_csv(index=False).encode('utf-8')
-        col_ex2.download_button("💾 Master_Curves.csv", csv_master_s, "Master_Sweeps_Consolidated.csv", "text/csv", use_container_width=True)
+                    st.markdown("""
+                    ### 🔬 How-To: Averaged Curves (Batch Plotting)
+                    This app automatically aligns current steps (`I_inj`) rounded to 4 decimals to avoid Axon binary sampling approximations.
+                    Sorting data along the X-axis removes overlapping traces and ensures publication-grade plots.
+                    """)
