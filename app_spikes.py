@@ -1,17 +1,3 @@
-Voici le code **complet, final et consolidé** pour votre application **`2_⚡_Spike_Analysis.py`**.
-
-Il intègre absolument toutes nos corrections et améliorations :
-
-1. La détection ultra-précise de l'AHP (période réfractaire de 3 ms + fenêtre de 50 ms).
-2. L'exclusion intelligente du *Depolarization Block* (qui ne s'active **que** si la cellule a déjà dépassé la rhéobase, protégeant ainsi vos traces sous-liminaires).
-3. La suppression de la capacitance.
-4. L'unité dynamique (nA ou pA) dans l'en-tête de la rhéobase pour l'export.
-5. Le panneau d'information biophysique en haut.
-6. Le DOI cliquable Zenodo dans le README en bas.
-
-Vous pouvez tout sélectionner, copier, et remplacer l'intégralité de votre fichier :
-
-```python
 import streamlit as st
 import pyabf
 import numpy as np
