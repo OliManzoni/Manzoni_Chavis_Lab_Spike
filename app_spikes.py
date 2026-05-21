@@ -55,7 +55,7 @@ with st.expander("ℹ️ **Information Biophysique, Méthodologie & Raccourcis /
         * **Seuil d'initiation (Threshold) :** Calculé sur le premier potentiel d'action via la méthode de la première dérivée ($dV/dt \ge 15$ mV/ms).
         * **AHP (Post-hyperpolarisation) :** Mesurée de manière robuste à l'aide d'une fenêtre glissante de 50 ms après le pic, protégée contre le bruit de crête par une période réfractaire de 3 ms. L'amplitude est calculée relativement au seuil du PA.
         * **Résistance d'entrée ($R_{in}$) :** Déterminée par régression linéaire sur la courbe Courant-Voltage des échelons hyperpolarisants.
-        * **Bloc de dépolarisation (*Depolarization Block*) :** Détecté automatiquement si le potentiel stationnaire d'un échelon dépolarisation dépasse $-45$ mV et provoque un arrêt précoce ou total de la décharge. Ces traces anormales sont automatiquement écartées des analyses et des fichiers d'exports.
+        * **Bloc de dépolarisation (*Depolarization Block*) :** Détecté automatiquement si le potentiel stationnaire d'un échelon dépolarisation dépasse $-45$ mV et provoque un arrêt de la décharge. Ces traces anormales sont automatiquement écartées des analyses et des fichiers d'exports. **Ne s'applique qu'après avoir atteint la rhéobase.**
         
         👉 **[Aller directement au README complet au bas de la page](#readme-formalise-citation)**
         """)
@@ -65,7 +65,7 @@ with st.expander("ℹ️ **Information Biophysique, Méthodologie & Raccourcis /
         * **Spike Initiation Threshold:** Calculated on the first action potential using the first derivative method ($dV/dt \ge 15$ mV/ms).
         * **AHP (After-Hyperpolarization):** Measured robustly using a 50 ms sliding window post-peak, protected against crest noise via a 3 ms refractory period. Amplitude is computed relative to the spike threshold.
         * **Input Resistance ($R_{in}$):** Determined by linear regression on the hyperpolarizing current-voltage relationship steps.
-        * **Depolarization Block:** Automatically flagged if the steady-state potential during a depolarizing step exceeds $-45$ mV and causes premature or total cessation of firing. These traces are automatically excluded from curves and exports.
+        * **Depolarization Block:** Automatically flagged if the steady-state potential during a depolarizing step exceeds $-45$ mV and causes cessation of firing. These traces are automatically excluded from curves and exports. **Only applies after rheobase is reached.**
         
         👉 **[Jump directly to the comprehensive README at the bottom](#readme-formalise-citation)**
         """)
@@ -97,6 +97,7 @@ if uploaded_file is not None:
         # Listes de suivi pour le bloc de dépolarisation
         excluded_sweeps = []
         is_excluded_list = []
+        has_reached_rheobase = False # <--- NOUVELLE MÉMOIRE ALGORITHMIQUE
         
         for sweep in abf.sweepList:
             abf.setSweep(sweep)
@@ -111,16 +112,21 @@ if uploaded_file is not None:
             peaks, _ = find_peaks(trace_win, height=spike_threshold, distance=min_dist_samples)
             num_spikes = len(peaks)
             
-            # --- DÉTECTION DU DEPOLARIZATION BLOCK ---
+            # --- DÉTECTION INTELLIGENTE DU DEPOLARIZATION BLOCK ---
             is_depol_block = False
-            if i_cmd > 0 and v_s > -45:
-                if num_spikes > 0:
-                    # Arrêt précoce des spikes au cours de la stimulation
-                    if peaks[-1] < int((idx_end - idx_start) * 0.6):
+            
+            if num_spikes > 0:
+                has_reached_rheobase = True # La cellule a prouvé qu'elle pouvait décharger
+                if i_cmd > 0 and v_s > -45:
+                    # Arrêt précoce : On demande num_spikes > 1 pour ne pas faussement exclure la rhéobase
+                    if num_spikes > 1 and peaks[-1] < int((idx_end - idx_start) * 0.6):
                         is_depol_block = True
-                else:
-                    # Aucun spike alors que le niveau stationnaire est fortement dépolarisé
-                    is_depol_block = True
+            else:
+                # 0 Spike : Est-ce un Depol Block ou juste avant la rhéobase ?
+                if i_cmd > 0 and v_s > -45:
+                    # Ne déclenche le bloc que si on a déjà dépassé la rhéobase lors d'un sweep précédent !
+                    if has_reached_rheobase:
+                        is_depol_block = True
             
             if is_depol_block:
                 excluded_sweeps.append(sweep)
@@ -257,131 +263,4 @@ if uploaded_file is not None:
             c_ap3.metric("Rise (10-90%)", f"{ap_rise[sw_idx]:.2f} ms")
             c_ap4.metric("Decay (90-10%)", f"{ap_decay[sw_idx]:.2f} ms")
             ahp_relative = v_thresh_list[sw_idx] - ap_ahp[sw_idx] if not np.isnan(v_thresh_list[sw_idx]) else np.nan
-            c_ap5.metric("AHP Amplitude", f"{ahp_relative:.1f} mV" if not np.isnan(ahp_relative) else "N/A")
-        else:
-            st.info(T["no_ap"][lang])
-            
-        st.write("") 
-        
-        plt.style.use('seaborn-v0_8-white')
-        fig = plt.figure(figsize=(16, 10))
-        gs = fig.add_gridspec(2, 2)
-        
-        ax1 = fig.add_subplot(gs[0, 0])
-        abf.setSweep(sw_idx)
-        ax1.plot(abf.sweepX, abf.sweepY, color='black', lw=1)
-        
-        if not np.isnan(v_thresh_list[sw_idx]):
-            ax1.axhline(v_thresh_list[sw_idx], color='red', ls='--', alpha=0.6, label="Threshold dV/dt")
-            
-            indices_to_plot = sweep_all_ahps_indices[sw_idx]
-            if indices_to_plot:
-                ax1.plot(abf.sweepX[indices_to_plot], abf.sweepY[indices_to_plot], 'bx', markersize=8, markeredgewidth=2, label="AHP Min")
-                
-            ax1.legend(loc='upper right')
-            
-        ax1.set_title(f"Sweep {sw_idx} " + ("(EXCLU - Depolarization Block)" if sw_idx in excluded_sweeps else ""), fontweight='bold')
-        ax1.set_ylabel("mV")
-
-        ax2 = fig.add_subplot(gs[0, 1])
-        cmap = plt.colormaps.get_cmap('viridis')
-        for i, s in enumerate(stk_indices):
-            abf.setSweep(s)
-            ax2.plot(abf.sweepX, abf.sweepY, color=cmap(i/max(1, len(stk_indices))), alpha=0.8, lw=0.8)
-        ax2.set_title(f"Overlay ({len(stk_indices)} traces)", fontweight='bold')
-        ax2.set_ylabel("mV")
-
-        # Extraction des tableaux propres sans traces aberrantes pour les courbes
-        valid_courants = [courants[idx] for idx in valid_indices]
-        valid_v_stat = [v_stat[idx] for idx in valid_indices]
-        valid_v_peak = [v_peak[idx] for idx in valid_indices]
-        valid_n_spikes = [n_spikes[idx] for idx in valid_indices]
-
-        ax3 = fig.add_subplot(gs[1, 0])
-        ax3.plot(valid_courants, valid_v_stat, 'o-', color='tab:blue', label="Steady-state")
-        ax3.plot(valid_courants, valid_v_peak, 'x--', color='tab:blue', alpha=0.5, label="Peak (Sag)")
-        if sw_idx in valid_indices:
-            ax3.plot(courants[sw_idx], v_stat[sw_idx], 'ro', markersize=9, zorder=5) 
-        ax3.set_title("I-V Curve (Cleaned)", fontweight='bold')
-        ax3.set_xlabel(f"Current ({unit_i})"); ax3.set_ylabel("mV"); ax3.legend()
-
-        ax4 = fig.add_subplot(gs[1, 1])
-        ax4.plot(valid_courants, valid_n_spikes, 's-', color='tab:orange')
-        if sw_idx in valid_indices:
-            ax4.plot(courants[sw_idx], n_spikes[sw_idx], 'ro', markersize=9, zorder=5) 
-        ax4.set_title("f-I Curve (Cleaned)", fontweight='bold')
-        ax4.set_xlabel(f"Current ({unit_i})"); ax4.set_ylabel("Spike count")
-        
-        st.pyplot(fig)
-
-        # --- EXPORT ---
-        st.divider()
-        st.subheader(T["export"][lang])
-        col_exp1, col_exp2 = st.columns(2)
-        
-        # Fichier d'exportation global mis à jour avec l'unité de courant
-        df_global = pd.DataFrame({
-            "File": [uploaded_file.name], 
-            "Vrest_mV": [v_rest_final], 
-            "Rin_MOhms": [rin],
-            "Tau_ms": [tau], 
-            f"Rheobase_I_{unit_i}": [rheo_i], 
-            "Rheobase_mV": [rheo_v]
-        })
-        col_exp1.download_button(T["exp_global"][lang], df_global.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Global.csv", use_container_width=True)
-
-        ap_ahp_relative = [v_t - a if not np.isnan(v_t) and not np.isnan(a) else np.nan for v_t, a in zip(v_thresh_list, ap_ahp)]
-
-        df_sweeps_all = pd.DataFrame({
-            "Sweep": abf.sweepList, "I_inj": courants, "Nb_Spikes": n_spikes,
-            "V_steady": v_stat, "V_threshold": v_thresh_list, "AP_Amp": ap_amps, 
-            "AP_Width_ms": ap_widths, "AP_Rise_ms": ap_rise, "AP_Decay_ms": ap_decay, "AP_AHP": ap_ahp_relative
-        })
-        
-        # Filtrer le tableau des sweeps pour exclure les traces concernées de l'exportation
-        df_sweeps_filtered = df_sweeps_all[~df_sweeps_all['Sweep'].isin(excluded_sweeps)].reset_index(drop=True)
-        col_exp2.download_button(T["exp_sweeps"][lang], df_sweeps_filtered.to_csv(index=False).encode('utf-8'), f"{uploaded_file.name}_Sweeps.csv", use_container_width=True)
-
-        # --- README, FORMALISME & CITATION ---
-        st.divider()
-        st.markdown("<div id='readme-formalise-citation'></div>", unsafe_allow_html=True)
-        with st.expander(T["readme_title"][lang]):
-            if lang == "Français":
-                st.markdown("""
-                ### 📄 README (Mode d'emploi)
-                Cet outil est conçu pour le traitement par lots et l'extraction biophysique de traces *Current-Clamp* (.abf).
-                1. Chargez votre fichier via le panneau latéral.
-                2. Réglez le **Seuil dV/dt (15 mV/ms par défaut)**. C'est l'étalon-or pour détecter l'ouverture massive des canaux sodiques.
-                3. Inspectez visuellement la qualité du *seal* et les potentiels instabilités de Vrest.
-                4. Les blocs de dépolarisation (*Depolarization Blocks*) sont écartés pour éviter de fausser les moyennes de population.
-                5. Exportez le profil biophysique global et les données métriques par échelons pour vos analyses statistiques.
-
-                ### 🧠 Formalisme & Limites
-                * **Decay Time (NaN) :** Si la métrique `Decay` indique `NaN`, c'est que le neurone n'a pas repolarisé sous les 10% de son amplitude dans une fenêtre de 100 ms (bloc de dépolarisation, inactivation $K^+$). C'est un paramètre biologique pertinent.
-
-                ### 🎓 Citation
-                Si vous utilisez ce code ou ce pipeline pour une publication scientifique, merci d'inclure le DOI et la citation suivante :
-                > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.*
-                > **Github:** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
-                """)
-            else:
-                st.markdown("""
-                ### 📄 README (Instructions)
-                This tool is designed for batch processing and biophysical extraction of *Current-Clamp* traces (.abf).
-                1. Upload your file via the sidebar.
-                2. Adjust the **dV/dt Threshold (default 15 mV/ms)**. This is the gold standard for detecting massive sodium channel opening.
-                3. Visually inspect the seal quality and any potential Vrest instabilities.
-                4. Depolarization Blocks are systematically filtered out to protect population averages from distortion.
-                5. Export the global biophysical profile and sweep-by-sweep metric data for statistical analysis.
-
-                ### 🧠 Formalism & Limitations
-                * **Decay Time (NaN) :** If the `Decay` metric shows `NaN`, it means the neuron did not repolarize below 10% of its amplitude within a 100 ms window (depolarization block, $K^+$ inactivation). This is a biologically relevant parameter.
-
-                ### 🎓 Citation
-                If you use this code or pipeline for a scientific publication, please include the DOI and following citation:
-                > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.*
-                > **Github:** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
-                """)
-
-    finally:
-        if os.path.exists(tmp_filepath): os.remove(tmp_filepath)
+            c_ap5.metric("AHP Amplitude", f"{ahp_relative:.1f} mV" if not np.isnan(ahp_relative) else "
