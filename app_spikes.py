@@ -97,7 +97,7 @@ if uploaded_file is not None:
         # Listes de suivi pour le bloc de dépolarisation
         excluded_sweeps = []
         is_excluded_list = []
-        has_reached_rheobase = False # <--- NOUVELLE MÉMOIRE ALGORITHMIQUE
+        has_reached_rheobase = False
         
         for sweep in abf.sweepList:
             abf.setSweep(sweep)
@@ -124,7 +124,7 @@ if uploaded_file is not None:
             else:
                 # 0 Spike : Est-ce un Depol Block ou juste avant la rhéobase ?
                 if i_cmd > 0 and v_s > -45:
-                    # Ne déclenche le bloc que si on a déjà dépassé la rhéobase lors d'un sweep précédent !
+                    # Ne déclenche le bloc que si on a déjà dépassé la rhéobase lors d'un sweep précédent
                     if has_reached_rheobase:
                         is_depol_block = True
             
@@ -209,58 +209,4 @@ if uploaded_file is not None:
             abf.setSweep(idx_t)
             v_targ = np.mean(abf.sweepY[idx_start-int(sr*0.01):idx_start]) + 0.632*(v_stat[idx_t]-np.mean(abf.sweepY[idx_start-int(sr*0.01):idx_start]))
             cross_t = np.where(abf.sweepY[idx_start:idx_end] <= v_targ)[0]
-            if len(cross_t)>0: 
-                tau = (cross_t[0]/sr)*1000.0
-                
-        # Recherche de la Rhéobase uniquement parmi les sweeps valides
-        rheo_idx_global = next((i for i in valid_indices if n_spikes[i] > 0), None)
-        rheo_v = v_thresh_list[rheo_idx_global] if rheo_idx_global is not None else np.nan
-        rheo_i = courants[rheo_idx_global] if rheo_idx_global is not None else np.nan
-
-        # --- DASHBOARD (SANS CAPACITANCE) ---
-        st.subheader(T["global_metrics"][lang])
-        c1, c2, c4, c5 = st.columns(4)
-        c1.metric("Vrest", f"{v_rest_final:.1f} mV")
-        c2.metric("Rin", f"{rin:.1f} MΩ")
-        c4.metric("Tau_m", f"{tau:.1f} ms")
-        c5.metric(T["rheo_th"][lang], f"{rheo_v:.1f} mV" if not np.isnan(rheo_v) else "N/A")
-
-        st.divider()
-
-        # --- VISUALISATION INTERACTIVE ---
-        st.subheader(T["visuals"][lang])
-        
-        col_v1, col_v2 = st.columns(2)
-        with col_v1:
-            if abf.sweepCount > 1:
-                default_sw = int(rheo_idx_global) if rheo_idx_global is not None else 0
-                default_sw = min(max(default_sw, 0), abf.sweepCount - 1) 
-                sw_idx = st.slider(T["select_sweep"][lang], 0, abf.sweepCount-1, default_sw)
-            else:
-                sw_idx = 0
-                st.info("Fichier à Sweep unique (Gap-free).")
-                
-        with col_v2:
-            if abf.sweepCount == 1:
-                default_stk = [0]
-            elif abf.sweepCount == 2:
-                default_stk = [0, 1]
-            else:
-                default_stk = [0, abf.sweepCount//2, abf.sweepCount-1]
-                
-            stk_indices = st.multiselect(T["select_overlay"][lang], list(range(abf.sweepCount)), default=default_stk)
-        
-        # Warning visuel individuel si l'utilisateur regarde une trace exclue
-        if sw_idx in excluded_sweeps:
-            st.warning(f"⚠️ **Attention : Le sweep {sw_idx} sélectionné est marqué comme Depolarization Block et est exclu des analyses macro.**")
-            
-        st.markdown(f"**{T['morph_title'][lang]} {sw_idx} ({courants[sw_idx]:.1f} {unit_i})**")
-        
-        if n_spikes[sw_idx] > 0:
-            c_ap1, c_ap2, c_ap3, c_ap4, c_ap5 = st.columns(5)
-            c_ap1.metric("Amplitude", f"{ap_amps[sw_idx]:.1f} mV")
-            c_ap2.metric("Half-Width", f"{ap_widths[sw_idx]:.2f} ms")
-            c_ap3.metric("Rise (10-90%)", f"{ap_rise[sw_idx]:.2f} ms")
-            c_ap4.metric("Decay (90-10%)", f"{ap_decay[sw_idx]:.2f} ms")
-            ahp_relative = v_thresh_list[sw_idx] - ap_ahp[sw_idx] if not np.isnan(v_thresh_list[sw_idx]) else np.nan
-            c_ap5.metric("AHP Amplitude", f"{ahp_relative:.1f} mV" if not np.isnan(ahp_relative) else "
+            if len(cross_t)>0:
