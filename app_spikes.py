@@ -388,7 +388,7 @@ if uploaded_file is not None:
                 If you use this code or pipeline for a scientific publication, please include the following citation and DOI:
                 > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.*
                 > **DOI:** [10.5281/zenodo.19912621](https://doi.org/10.5281/zenodo.19912621)
-                > **Github:** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
+                > **Github:** [https://github.com/OliManzoni/Manzoni_Chavis_Lab_Spike](https://github.com)
                 """)
 
     finally:
