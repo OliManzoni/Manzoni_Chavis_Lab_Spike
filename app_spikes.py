@@ -16,8 +16,8 @@ st.sidebar.header("🌍 Language / Langue")
 lang = st.sidebar.radio("Select Interface Language:", ["Français", "English"])
 
 T = {
-    "title": {"Français": "Pipeline Expert : Excitabilité & Morphométrie", "English": "Expert Pipeline: Excitability & Morphometry"},
-    "subtitle": {"Français": "Analyse de la Plasticité Synaptique | Standard de Publication", "English": "Synaptic Plasticity Analysis | Publication Standard"},
+    "title": {"Français": "Pipeline Expert : Excitabilité", "English": "Expert Pipeline: Excitability"},
+    "subtitle": {"Français": "Analyse des Potentiels d'Action | DOI:** [10.5281/zenodo.19912621](https://doi.org/10.5281/zenodo.19912621) [https://github.com/OliManzoni/Manzoni_Chavis_Lab_Spike])", "English": "Spike Analysis | DOI:** [10.5281/zenodo.19912621](https://doi.org/10.5281/zenodo.19912621) [https://github.com/OliManzoni/Manzoni_Chavis_Lab_Spike]"},
     "load": {"Français": "📂 1. Chargement", "English": "📂 1. Upload File"},
     "upload_btn": {"Français": "Charger un fichier ABF", "English": "Upload an ABF file"},
     "settings": {"Français": "⚙️ 2. Réglages de Détection", "English": "⚙️ 2. Detection Settings"},
@@ -369,7 +369,7 @@ if uploaded_file is not None:
                 Si vous utilisez ce code ou cette pipeline pour une publication scientifique, merci d'inclure la citation et le DOI suivants :
                 > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.*
                 > **DOI :** [10.5281/zenodo.19912621](https://doi.org/10.5281/zenodo.19912621)
-                > **Github :** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
+                > **Github :** [github.com/OliManzoni/Manzoni_Chavis_Lab_Spike](https://github.com)
                 """)
             else:
                 st.markdown("""
