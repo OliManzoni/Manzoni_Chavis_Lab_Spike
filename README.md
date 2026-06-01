@@ -1,5 +1,9 @@
 🇫🇷 Version Française
 
+pour nous citer:
+https://github.com/OliManzoni/Manzoni_Chavis_Lab_Spike
+https://doi.org/10.5281/zenodo.19912621
+
 Ce dépôt contient le code source du Pipeline Expert Excitabilité, une application analytique haute performance conçue pour l'extraction automatisée des propriétés biophysiques neuronales à partir de fichiers .abf (Current-Clamp).
 🚀 Déploiement & Accessibilité
 
@@ -112,6 +116,9 @@ Le bouton "Exportation des Résultats" génère deux fichiers :
     _Sweeps.csv : Matrice détaillée par échelon de courant (Points bruts de la courbe f-I, cinétiques fines du 1er PA telles que l'amplitude, Half-Width, Rise et Decay) prête à être importée sous GraphPad Prism.
 
 🇬🇧 English Version
+to cite us:
+https://github.com/OliManzoni/Manzoni_Chavis_Lab_Spike
+https://doi.org/10.5281/zenodo.19912621
 
 This repository contains the source code for the Expert Excitability Pipeline, a high-performance analytical application designed for the automated extraction of neuronal biophysical properties from .abf (Current-Clamp) files.
 🚀 Deployment & Accessibility
