@@ -16,8 +16,8 @@ st.sidebar.header("🌍 Language / Langue")
 lang = st.sidebar.radio("Select Interface Language:", ["Français", "English"])
 
 T = {
-    "title": {"Français": "Pipeline Expert : Excitabilité", "English": "Expert Pipeline: Excitability"},
-    "subtitle": {"Français": "Analyse des Potentiels d'Action | DOI:** [10.5281/zenodo.19912621](https://doi.org/10.5281/zenodo.19912621) [https://github.com/OliManzoni/Manzoni_Chavis_Lab_Spike])", "English": "Spike Analysis | DOI:** [10.5281/zenodo.19912621](https://doi.org/10.5281/zenodo.19912621) [https://github.com/OliManzoni/Manzoni_Chavis_Lab_Spike]"},
+    "title": {"Français": "Pipeline Expert : Excitabilité & Morphométrie", "English": "Expert Pipeline: Excitability & Morphometry"},
+    "subtitle": {"Français": "Analyse de la Plasticité Synaptique | Standard de Publication", "English": "Synaptic Plasticity Analysis | Publication Standard"},
     "load": {"Français": "📂 1. Chargement", "English": "📂 1. Upload File"},
     "upload_btn": {"Français": "Charger un fichier ABF", "English": "Upload an ABF file"},
     "settings": {"Français": "⚙️ 2. Réglages de Détection", "English": "⚙️ 2. Detection Settings"},
@@ -52,9 +52,11 @@ with st.expander("ℹ️ **Information Biophysique, Méthodologie & Raccourcis /
     if lang == "Français":
         st.markdown("""
         ### 🔬 Résumé Méthodologique
-        * **Seuil d'initiation (Threshold) :** Calculé sur le premier potentiel d'action via la méthode de la première dérivée ($dV/dt \ge 15$ mV/ms).
-        * **AHP (Post-hyperpolarisation) :** Mesurée de manière robuste à l'aide d'une fenêtre glissante de 50 ms après le pic, protégée contre le bruit de crête par une période réfractaire de 3 ms. L'amplitude est calculée relativement au seuil du PA.
-        * **Résistance d'entrée ($R_{in}$) :** Déterminée par régression linéaire sur la courbe Courant-Voltage des échelons hyperpolarisants.
+        * **Seuil d'initiation (Threshold) :** Calculé sur le premier potentiel d'action via la méthode de la première dérivée ($dV/dt \\ge 15$ mV/ms).
+        * **AHP (Post-hyperpolarisation) :** Mesurée via une fenêtre glissante de **50 ms** après le pic de chaque PA (ou jusqu'au prochain PA si plus proche). Le minimum absolu dans cette fenêtre est retenu. L'amplitude est calculée relativement au seuil du PA (`Seuil - V_AHP_min`). Une valeur positive indique une hyperpolarisation sous le seuil.
+        * **Résistance d'entrée ($R_{in}$) :** Déterminée par régression linéaire sur les 4 **plus petits** échelons hyperpolarisants (les plus proches de 0 pA/nA), avec passage forcé par le point de repos $(0, V_{rest})$. Ce choix minimise la contamination par le courant $I_h$ (courant funny) qui s'active aux grandes hyperpolarisations.
+        * **Constante de temps membranaire ($\tau_m$) :** Calculée sur le **plus petit** échelon hyperpolarisant (courant le plus proche de 0) via la méthode de l'intersection à 63.2% de la réponse stationnaire. Ce choix préserve la linéarité du circuit membranaire.
+        * **Demi-largeur du PA :** Mesurée à 50% de l'amplitude entre le **seuil dV/dt** et le pic (et non entre $V_{rest}$ et le pic). Cette convention ancre la largeur à l'état électrique actif de la membrane plutôt qu'au potentiel de repos.
         * **Bloc de dépolarisation (*Depolarization Block*) :** Détecté automatiquement si le potentiel stationnaire d'un échelon dépolarisation dépasse $-45$ mV et provoque un arrêt de la décharge. Ces traces anormales sont automatiquement écartées des analyses et des fichiers d'exports. **Ne s'applique qu'après avoir atteint la rhéobase.**
         
         👉 **[Aller directement au README complet au bas de la page](#readme-formalise-citation)**
@@ -62,9 +64,11 @@ with st.expander("ℹ️ **Information Biophysique, Méthodologie & Raccourcis /
     else:
         st.markdown("""
         ### 🔬 Methodological Summary
-        * **Spike Initiation Threshold:** Calculated on the first action potential using the first derivative method ($dV/dt \ge 15$ mV/ms).
-        * **AHP (After-Hyperpolarization):** Measured robustly using a 50 ms sliding window post-peak, protected against crest noise via a 3 ms refractory period. Amplitude is computed relative to the spike threshold.
-        * **Input Resistance ($R_{in}$):** Determined by linear regression on the hyperpolarizing current-voltage relationship steps.
+        * **Spike Initiation Threshold:** Calculated on the first action potential using the first derivative method ($dV/dt \\ge 15$ mV/ms).
+        * **AHP (After-Hyperpolarization):** Measured using a **50 ms** sliding window after each spike peak (or until the next spike if sooner). The absolute minimum in that window is retained. Amplitude is computed relative to the spike threshold (`Threshold − V_AHP_min`); a positive value indicates hyperpolarization below threshold.
+        * **Input Resistance ($R_{in}$):** Determined by linear regression on the **4 smallest** hyperpolarizing current steps (closest to 0 pA/nA), with the fit forced through the resting point $(0, V_{rest})$. Using the smallest steps minimises contamination from $I_h$ (HCN/funny current) which activates at large hyperpolarizations.
+        * **Membrane Time Constant ($\tau_m$):** Computed on the **smallest** hyperpolarizing step via the 63.2% steady-state crossing method. The smallest step preserves membrane linearity.
+        * **AP Half-Width:** Measured at 50% of the amplitude between the **dV/dt threshold** and the peak (not between $V_{rest}$ and the peak). This anchors width to the electrically active state of the membrane rather than to resting potential.
         * **Depolarization Block:** Automatically flagged if the steady-state potential during a depolarizing step exceeds $-45$ mV and causes cessation of firing. These traces are automatically excluded from curves and exports. **Only applies after rheobase is reached.**
         
         👉 **[Jump directly to the comprehensive README at the bottom](#readme-formalise-citation)**
@@ -364,12 +368,15 @@ if uploaded_file is not None:
 
                 ### 🧠 Formalisme & Limites
                 * **Decay Time (NaN) :** Si la métrique `Decay` indique `NaN`, c'est que le neurone n'a pas repolarisé sous les 10% de son amplitude dans une fenêtre de 100 ms (bloc de dépolarisation, inactivation $K^+$). C'est un paramètre biologique pertinent.
+                * **Demi-largeur :** Mesurée à 50% entre le **seuil dV/dt** et le pic, pas entre $V_{rest}$ et le pic. Certaines publications utilisent $V_{rest}$ comme base — précisez la convention choisie dans vos méthodes.
+                * **$R_{in}$ :** La régression est forcée par $(0, V_{rest})$. Si votre cellule présente un $V_{rest}$ instable, cette contrainte peut biaiser l'estimation.
+                * **$\tau_m$ :** Estimée sur le plus petit échelon hyperpolarisant pour préserver la linéarité. Pour une estimation plus robuste au bruit, certains laboratoires utilisent le plus grand échelon — les deux approches sont valides selon le contexte.
 
                 ### 🎓 Citation
                 Si vous utilisez ce code ou cette pipeline pour une publication scientifique, merci d'inclure la citation et le DOI suivants :
                 > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.*
                 > **DOI :** [10.5281/zenodo.19912621](https://doi.org/10.5281/zenodo.19912621)
-                > **Github :** [github.com/OliManzoni/Manzoni_Chavis_Lab_Spike](https://github.com)
+                > **Github :** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
                 """)
             else:
                 st.markdown("""
@@ -382,13 +389,16 @@ if uploaded_file is not None:
                 5. Export the global biophysical profile and sweep-by-sweep metric data for statistical analysis.
 
                 ### 🧠 Formalism & Limitations
-                * **Decay Time (NaN) :** If the `Decay` metric shows `NaN`, it means the neuron did not repolarize below 10% of its amplitude within a 100 ms window (depolarization block, $K^+$ inactivation). This is a biologically relevant parameter.
+                * **Decay Time (NaN):** If the `Decay` metric shows `NaN`, the neuron did not repolarize below 10% of its amplitude within a 100 ms window (depolarization block, $K^+$ inactivation). This is a biologically relevant parameter.
+                * **Half-Width:** Measured at 50% between the **dV/dt threshold** and the peak, not between $V_{rest}$ and the peak. Some publications use $V_{rest}$ as the base — specify your convention clearly in the methods section.
+                * **$R_{in}$:** The regression is forced through $(0, V_{rest})$. If your cell shows an unstable resting potential, this constraint may bias the estimate.
+                * **$\tau_m$:** Estimated on the smallest hyperpolarizing step to preserve membrane linearity. For better noise robustness, some labs use the largest step — both approaches are valid depending on context.
 
                 ### 🎓 Citation
                 If you use this code or pipeline for a scientific publication, please include the following citation and DOI:
                 > **Manzoni Lab (2026).** *Expert Pipeline: Neural Excitability & Morphometry.*
                 > **DOI:** [10.5281/zenodo.19912621](https://doi.org/10.5281/zenodo.19912621)
-                > **Github:** [https://github.com/OliManzoni/Manzoni_Chavis_Lab_Spike](https://github.com)
+                > **Github:** [github.com/ManzoniLab/ElectrophyPipeline](https://github.com)
                 """)
 
     finally:
